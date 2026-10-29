@@ -34,7 +34,7 @@ function viewingReasonId(reasons: VisitReason[], service: PropertyService): stri
 
 /** "Booking for Priya" when the form was opened from a lead in the CRM. */
 function CrmLeadCard({ lead, loading, error }: { lead?: CrmLead; loading: boolean; error: unknown }) {
-  if (loading) return <p className="mb-4 flex items-center gap-2 text-sm text-muted-fg"><Spinner className="size-4" /> Loading the lead from the CRM…</p>;
+  if (loading) return <p className="mb-4 flex items-center gap-2 text-sm text-muted-fg bg-amber-400"><Spinner className="size-4" /> Loading the lead from the CRM…</p>;
   if (error) return <p className="mb-4 rounded-xl bg-danger-bg p-3 text-sm text-danger">{errorMessage(error)}</p>;
   if (!lead) return null;
   return (
