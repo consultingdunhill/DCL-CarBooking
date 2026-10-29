@@ -1,7 +1,7 @@
 import { DEPARTMENT_LABELS, DEPARTMENTS, VisitReasonSchema, type Department } from '@carbooking/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, ChevronDown, ChevronUp, Pencil, Plus, Tags } from 'lucide-react';
-import { useState } from 'react';
+import { Archive, ArchiveRestore, Check, ChevronDown, ChevronUp, Pencil, Plus, Tags } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { QueryBlock, TableSkeleton } from '@/components/admin/common';
 import { check, type FieldErrors } from '@/components/admin/form-utils';
@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { Dialog } from '@/components/ui/dialog';
-import { Field, Input, Select, Switch } from '@/components/ui/form';
+import { Field, Input, Switch } from '@/components/ui/form';
 import { EmptyState, PageHeader } from '@/components/ui/misc';
 import { errorMessage, get, post, put } from '@/lib/api';
 import type { VisitReason } from '@/lib/types';
@@ -20,6 +20,127 @@ type ReasonRow = VisitReason & { _count?: { stops: number } };
 const KEY = ['admin', 'reasons'] as const;
 
 const bySort = (a: ReasonRow, b: ReasonRow) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label);
+
+function DepartmentSelect({
+  value,
+  onChange,
+  id,
+  invalid,
+  describedBy,
+}: {
+  value: Department;
+  onChange: (department: Department) => void;
+  id: string;
+  invalid?: boolean;
+  describedBy?: string;
+}) {
+  const listId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const selectedIndex = DEPARTMENTS.indexOf(value);
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const choose = (department: Department) => {
+    onChange(department);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        id={id}
+        type="button"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-haspopup="listbox"
+        aria-activedescendant={open ? `${listId}-${DEPARTMENTS[activeIndex]}` : undefined}
+        aria-invalid={invalid}
+        aria-describedby={describedBy}
+        onClick={() => {
+          setActiveIndex(selectedIndex);
+          setOpen((isOpen) => !isOpen);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (!open) {
+              setActiveIndex(selectedIndex);
+              setOpen(true);
+            } else {
+              setActiveIndex((index) =>
+                event.key === 'ArrowDown'
+                  ? Math.min(DEPARTMENTS.length - 1, index + 1)
+                  : Math.max(0, index - 1),
+              );
+            }
+          } else if (event.key === 'Enter' || event.key === ' ') {
+            if (open) {
+              event.preventDefault();
+              choose(DEPARTMENTS[activeIndex]!);
+            } else {
+              event.preventDefault();
+              setOpen(true);
+            }
+          } else if (event.key === 'Escape') {
+            setOpen(false);
+          }
+        }}
+        className={cn(
+          'flex h-10 w-full items-center gap-3 rounded-lg border border-border bg-surface px-3 text-left text-sm text-fg transition-colors',
+          'hover:bg-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+          invalid && 'border-danger',
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate">{DEPARTMENT_LABELS[value]}</span>
+        <ChevronDown className={cn('size-4 shrink-0 text-muted-fg transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div
+          id={listId}
+          role="listbox"
+          aria-labelledby={id}
+          className="absolute inset-x-0 top-full z-50 mt-1 max-h-56 overflow-y-auto rounded-lg border border-border bg-surface py-1 shadow-float"
+        >
+          {DEPARTMENTS.map((department, index) => (
+            <div
+              key={department}
+              id={`${listId}-${department}`}
+              role="option"
+              aria-selected={department === value}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => choose(department)}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2.5 text-sm transition-colors',
+                index === activeIndex ? 'bg-muted' : 'hover:bg-muted',
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate">{DEPARTMENT_LABELS[department]}</span>
+              {department === value && <Check className="size-4 shrink-0 text-primary" />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ReasonsPage() {
   const qc = useQueryClient();
@@ -290,13 +411,13 @@ function ReasonDialog({
           </Field>
           <Field label="Department" required error={errors.department}>
             {(p) => (
-              <Select {...p} value={dept} onChange={(e) => setDept(e.target.value as Department)}>
-                {DEPARTMENTS.map((d) => (
-                  <option key={d} value={d}>
-                    {DEPARTMENT_LABELS[d]}
-                  </option>
-                ))}
-              </Select>
+              <DepartmentSelect
+                value={dept}
+                onChange={setDept}
+                id={p.id}
+                invalid={p['aria-invalid']}
+                describedBy={p['aria-describedby']}
+              />
             )}
           </Field>
         </div>
