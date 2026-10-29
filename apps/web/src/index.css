@@ -1,0 +1,159 @@
+@import 'tailwindcss';
+@import 'leaflet/dist/leaflet.css';
+
+/* Design tokens. Components use the Tailwind names (bg-surface, text-muted-fg …). */
+:root {
+  --bg: #f6f5f1;
+  --surface: #ffffff;
+  --surface-2: #fbfaf7;
+  --fg: #1b1f1d;
+  --muted: #eeece6;
+  --muted-fg: #66706b;
+  --border: #e3e0d8;
+  --ring: #0f5e57;
+  --primary: #0f5e57;
+  --primary-hover: #0c4f49;
+  --primary-fg: #f6f3ea;
+  --accent: #e5efec;
+  --accent-fg: #0f4a44;
+  --success: #17803d;
+  --success-bg: #e7f4ea;
+  --warning: #a8540a;
+  --warning-bg: #fbf0e0;
+  --danger: #b4231b;
+  --danger-bg: #fbe9e7;
+  --info: #1f4fbf;
+  --info-bg: #e8eefb;
+  --lost: #2b2f2d;
+  --lost-bg: #e6e6e3;
+  --shadow: 0 1px 2px rgb(20 24 22 / 0.06), 0 4px 16px rgb(20 24 22 / 0.06);
+  --shadow-lg: 0 8px 40px rgb(20 24 22 / 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121514;
+    --surface: #1a1e1c;
+    --surface-2: #161917;
+    --fg: #e9ebe8;
+    --muted: #242926;
+    --muted-fg: #9aa39e;
+    --border: #2d3330;
+    --ring: #5fb8ab;
+    --primary: #4fae9f;
+    --primary-hover: #66c0b2;
+    --primary-fg: #0d1513;
+    --accent: #1d2b28;
+    --accent-fg: #9fd8cd;
+    --success: #4cc27a;
+    --success-bg: #16271c;
+    --warning: #e3a253;
+    --warning-bg: #2b2215;
+    --danger: #f07a70;
+    --danger-bg: #2e1816;
+    --info: #86a8f5;
+    --info-bg: #182036;
+    --lost: #d6d9d7;
+    --lost-bg: #2a2e2c;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
+    --shadow-lg: 0 8px 40px rgb(0 0 0 / 0.5);
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-muted-fg: var(--muted-fg);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg: var(--primary-fg);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-lost: var(--lost);
+  --color-lost-bg: var(--lost-bg);
+  --shadow-card: var(--shadow);
+  --shadow-float: var(--shadow-lg);
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --radius-card: 14px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg text-fg antialiased;
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-tap-highlight-color: transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+  }
+}
+
+/* Numbers line up in tables and stats. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A soft shadow at the top or bottom edge of a scroll area while there is more to scroll to.
+   The `local` covers scroll with the content and hide each shadow once that end is reached. */
+.scroll-shadow {
+  --edge: color-mix(in srgb, var(--fg) 14%, transparent);
+  background:
+    linear-gradient(var(--surface) 30%, transparent) top / 100% 40px no-repeat local,
+    linear-gradient(transparent, var(--surface) 70%) bottom / 100% 40px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, var(--edge), transparent) top / 100% 12px no-repeat,
+    radial-gradient(farthest-side at 50% 100%, var(--edge), transparent) bottom / 100% 12px no-repeat,
+    var(--surface);
+}
+
+.safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+}
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Leaflet sits under our floating panels and dialogs. */
+.leaflet-container {
+  font-family: inherit;
+  background: var(--muted);
+  z-index: 0;
+}
+.leaflet-control-attribution {
+  font-size: 10px;
+}
+.map-pin {
+  background: none;
+  border: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

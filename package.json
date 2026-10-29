@@ -1,0 +1,43 @@
+{
+  "name": "carbooking",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @carbooking/api --filter @carbooking/worker --filter @carbooking/web dev",
+    "share": "bash scripts/share.sh",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @carbooking/db migrate:deploy",
+    "db:migrate:dev": "pnpm --filter @carbooking/db migrate:dev",
+    "db:seed": "pnpm --filter @carbooking/db seed",
+    "db:reset": "pnpm --filter @carbooking/db reset"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "~5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma"
+    ],
+    "packageExtensions": {
+      "@whiskeysockets/baileys@6": {
+        "peerDependenciesMeta": {
+          "sharp": {
+            "optional": true
+          }
+        }
+      }
+    }
+  }
+}

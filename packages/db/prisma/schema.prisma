@@ -1,0 +1,673 @@
+// Company car booking & trip tracking.
+// All timestamps are stored in UTC (timestamptz) and shown in East Africa Time.
+// Raw SQL in the migrations adds what Prisma can't express: PostGIS geography
+// columns and the exclusion constraints that stop double booking.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis, btree_gist]
+}
+
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+enum Role {
+  STAFF
+  ADMIN
+}
+
+enum Department {
+  SALES
+  LETTINGS
+  PROPERTY_MANAGEMENT
+  OTHER
+}
+
+enum CarStatus {
+  AVAILABLE
+  MAINTENANCE
+  RETIRED
+}
+
+enum FuelType {
+  PETROL
+  DIESEL
+  HYBRID
+  ELECTRIC
+}
+
+enum BookingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  IN_PROGRESS
+  COMPLETED
+  AWAITING_ODOMETER
+  NO_SHOW
+}
+
+enum StopStatus {
+  PROPOSED
+  PLANNED
+  ARRIVED
+  DEPARTED
+  SKIPPED
+  REJECTED
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum TrackingStatus {
+  NOT_STARTED
+  LIVE
+  OFFLINE
+  LOCATION_OFF
+  TRACKING_LOST
+  STOPPED
+}
+
+enum TripEndMethod {
+  MANUAL
+  GEOFENCE
+  ADMIN
+}
+
+enum TrackingEventType {
+  TRIP_STARTED
+  TRIP_ENDED
+  LOCATION_OFF
+  LOCATION_ON
+  PERMISSION_CHANGED
+  OFFLINE
+  ONLINE
+  AIRPLANE_MODE_ON
+  AIRPLANE_MODE_OFF
+  HEARTBEAT_MISSED
+  TRACKING_LOST
+  TRACKING_RESUMED
+  GEOFENCE_ENTER
+  GEOFENCE_EXIT
+  OFFICE_ARRIVED
+  STOP_ARRIVED
+  STOP_DEPARTED
+  STOP_ADDED
+  STOP_CHANGED
+  OVERDUE
+  ETA_EXTENDED
+  LOW_BATTERY
+  AWAITING_ODOMETER
+}
+
+enum EventSource {
+  DEVICE
+  SERVER
+}
+
+enum ClientType {
+  VENDOR
+  LANDLORD
+  OTHER
+}
+
+enum PropertyService {
+  SALES
+  LETTINGS
+  MANAGEMENT
+}
+
+enum PropertyStatus {
+  ACTIVE
+  SOLD
+  LET
+  WITHDRAWN
+}
+
+enum DealType {
+  SALE
+  LETTING
+}
+
+enum ImportRowStatus {
+  MATCHED
+  UNMATCHED
+  RESOLVED
+  IGNORED
+  DUPLICATE
+}
+
+enum FuelEntryType {
+  FILL_UP
+  MONTHLY
+}
+
+enum NotificationChannel {
+  IN_APP
+  PUSH
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum PushKind {
+  WEB
+  FCM
+}
+
+// ── People ────────────────────────────────────────────────────────────────────
+
+model User {
+  id                String      @id @default(uuid()) @db.Uuid
+  entraOid          String?     @unique
+  name              String
+  email             String      @unique
+  phone             String?
+  role              Role        @default(STAFF)
+  department        Department?
+  jobRoleId         String?     @db.Uuid
+  jobRole           JobRole?    @relation(fields: [jobRoleId], references: [id])
+  active            Boolean     @default(true)
+  privacyAckAt      DateTime?   @db.Timestamptz(3)
+  privacyAckVersion String?
+  lastLoginAt       DateTime?   @db.Timestamptz(3)
+  createdAt         DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(3)
+
+  bookings          Booking[]            @relation("BookingOwner")
+  decidedBookings   Booking[]            @relation("BookingDecidedBy")
+  createdBookings   Booking[]            @relation("BookingCreatedBy")
+  passengerOn       BookingPassenger[]
+  stopsAdded        BookingStop[]
+  joinRequests      JoinRequest[]        @relation("JoinRequester")
+  decidedJoins      JoinRequest[]        @relation("JoinDecidedBy")
+  propertiesCreated Property[]
+  closures          Closure[]
+  fuelEntries       FuelEntry[]
+  notifications     Notification[]
+  pushSubscriptions PushSubscription[]
+  auditLogs         AuditLog[]
+  closureImports    ClosureImportBatch[]
+}
+
+/**
+ * A job role for costing staff time (e.g. Sales Agent). Not an access role.
+ */
+model JobRole {
+  id     String       @id @default(uuid()) @db.Uuid
+  name   String       @unique
+  active Boolean      @default(true)
+  users  User[]
+  rates  HourlyRate[]
+}
+
+/**
+ * The company driver. A record the admin manages, not a login.
+ */
+model Driver {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  phone     String
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  bookings  Booking[]
+}
+
+/**
+ * Dated hourly cost rates, so changing a rate doesn't rewrite past reports.
+ */
+model HourlyRate {
+  id            String   @id @default(uuid()) @db.Uuid
+  jobRoleId     String?  @db.Uuid
+  jobRole       JobRole? @relation(fields: [jobRoleId], references: [id])
+  forDriver     Boolean  @default(false)
+  rate          Decimal  @db.Decimal(12, 2)
+  effectiveFrom DateTime @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([jobRoleId, effectiveFrom])
+}
+
+// ── Fleet ─────────────────────────────────────────────────────────────────────
+
+model Office {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String
+  address        String
+  /// Parking point: the car counts as back when within arrivalRadiusM of it.
+  lat            Float
+  lng            Float
+  arrivalRadiusM Int      @default(20)
+  /// Larger geofence that wakes the app as the car approaches.
+  wakeupRadiusM  Int      @default(150)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(3)
+  cars           Car[]
+}
+
+model Car {
+  id              String      @id @default(uuid()) @db.Uuid
+  registration    String      @unique
+  make            String
+  model           String
+  color           String?
+  seats           Int?
+  fuelType        FuelType
+  status          CarStatus   @default(AVAILABLE)
+  homeOfficeId    String?     @db.Uuid
+  homeOffice      Office?     @relation(fields: [homeOfficeId], references: [id])
+  /// Last recorded end odometer reading (km).
+  currentOdometer Int         @default(0)
+  notes           String?
+  createdAt       DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime    @updatedAt @db.Timestamptz(3)
+  bookings        Booking[]
+  fuelEntries     FuelEntry[]
+}
+
+model VisitReason {
+  id              String        @id @default(uuid()) @db.Uuid
+  label           String
+  department      Department
+  countsAsViewing Boolean       @default(false)
+  needsProperty   Boolean       @default(false)
+  sortOrder       Int           @default(0)
+  /// Archived reasons stay in history and reports.
+  active          Boolean       @default(true)
+  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
+  stops           BookingStop[]
+  bookings        Booking[]
+  joinRequests    JoinRequest[]
+}
+
+// ── Portfolio ─────────────────────────────────────────────────────────────────
+
+model Client {
+  id         String     @id @default(uuid()) @db.Uuid
+  name       String
+  type       ClientType
+  phone      String?
+  email      String?
+  crmRef     String?    @unique
+  createdAt  DateTime   @default(now()) @db.Timestamptz(3)
+  properties Property[]
+}
+
+model Property {
+  id          String                                 @id @default(uuid()) @db.Uuid
+  ref         String                                 @unique
+  crmRef      String?                                @unique
+  address     String
+  lat         Float?
+  lng         Float?
+  /// Generated column (see the init migration); used for "nearby property" lookups.
+  geog        Unsupported("geography(Point, 4326)")? @default(dbgenerated("\nCASE\n    WHEN ((lat IS NOT NULL) AND (lng IS NOT NULL)) THEN (st_setsrid(st_makepoint(lng, lat), 4326))::geography\n    ELSE NULL::geography\nEND"))
+  clientId    String?                                @db.Uuid
+  client      Client?                                @relation(fields: [clientId], references: [id])
+  service     PropertyService
+  status      PropertyStatus                         @default(ACTIVE)
+  /// Staff can add properties while booking; the admin reviews new ones.
+  needsReview Boolean                                @default(false)
+  createdById String?                                @db.Uuid
+  createdBy   User?                                  @relation(fields: [createdById], references: [id])
+  createdAt   DateTime                               @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime                               @updatedAt @db.Timestamptz(3)
+  stops       BookingStop[]
+  closures    Closure[]
+
+  @@index([status])
+}
+
+model Closure {
+  id            String              @id @default(uuid()) @db.Uuid
+  propertyId    String              @db.Uuid
+  property      Property            @relation(fields: [propertyId], references: [id])
+  staffId       String?             @db.Uuid
+  staff         User?               @relation(fields: [staffId], references: [id])
+  closedAt      DateTime            @db.Timestamptz(3)
+  dealType      DealType
+  fee           Decimal?            @db.Decimal(14, 2)
+  /// The deal's ID in the CRM, used to skip rows imported before.
+  crmRef        String?             @unique
+  importBatchId String?             @db.Uuid
+  importBatch   ClosureImportBatch? @relation(fields: [importBatchId], references: [id])
+  createdAt     DateTime            @default(now()) @db.Timestamptz(3)
+  importRows    ClosureImportRow[]
+
+  @@index([closedAt])
+}
+
+model ClosureImportBatch {
+  id             String             @id @default(uuid()) @db.Uuid
+  fileName       String
+  uploadedById   String             @db.Uuid
+  uploadedBy     User               @relation(fields: [uploadedById], references: [id])
+  uploadedAt     DateTime           @default(now()) @db.Timestamptz(3)
+  rowCount       Int
+  matchedCount   Int
+  unmatchedCount Int
+  duplicateCount Int                @default(0)
+  rows           ClosureImportRow[]
+  closures       Closure[]
+}
+
+/// One CSV row. Unmatched rows form the admin's review queue.
+model ClosureImportRow {
+  id        String             @id @default(uuid()) @db.Uuid
+  batchId   String             @db.Uuid
+  batch     ClosureImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber Int
+  raw       Json
+  status    ImportRowStatus
+  problems  String[]
+  closureId String?            @db.Uuid
+  closure   Closure?           @relation(fields: [closureId], references: [id])
+  createdAt DateTime           @default(now()) @db.Timestamptz(3)
+
+  @@index([status])
+}
+
+// ── Bookings ──────────────────────────────────────────────────────────────────
+
+model Booking {
+  id                 String        @id @default(uuid()) @db.Uuid
+  /// The staff member who booked: the trip owner.
+  ownerId            String        @db.Uuid
+  owner              User          @relation("BookingOwner", fields: [ownerId], references: [id])
+  driverId           String        @db.Uuid
+  driver             Driver        @relation(fields: [driverId], references: [id])
+  carId              String        @db.Uuid
+  car                Car           @relation(fields: [carId], references: [id])
+  status             BookingStatus @default(PENDING)
+  startAt            DateTime      @db.Timestamptz(3)
+  expectedReturnAt   DateTime      @db.Timestamptz(3)
+  /// Main reason (the first stop's), for quick filtering.
+  reasonId           String?       @db.Uuid
+  reason             VisitReason?  @relation(fields: [reasonId], references: [id])
+  notes              String?
+  /// Flagged urgent by the requester: every admin gets push + SMS/WhatsApp.
+  urgent             Boolean       @default(false)
+  /// Who created the booking when an admin booked on someone's behalf.
+  createdById        String?       @db.Uuid
+  createdBy          User?         @relation("BookingCreatedBy", fields: [createdById], references: [id])
+  plannedDistanceKm  Float?
+  plannedDurationMin Int?
+  plannedPolyline    String?
+  decidedById        String?       @db.Uuid
+  decidedBy          User?         @relation("BookingDecidedBy", fields: [decidedById], references: [id])
+  decidedAt          DateTime?     @db.Timestamptz(3)
+  rejectionReason    String?
+  cancelledAt        DateTime?     @db.Timestamptz(3)
+  cancelReason       String?
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
+
+  stops        BookingStop[]
+  passengers   BookingPassenger[]
+  joinRequests JoinRequest[]
+  trip         Trip?
+
+  @@index([status, startAt])
+  @@index([carId, startAt])
+  @@index([driverId, startAt])
+  @@index([ownerId, startAt])
+}
+
+model BookingStop {
+  id            String       @id @default(uuid()) @db.Uuid
+  bookingId     String       @db.Uuid
+  booking       Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  seq           Int
+  propertyId    String?      @db.Uuid
+  property      Property?    @relation(fields: [propertyId], references: [id])
+  placeId       String?
+  label         String?
+  address       String
+  lat           Float
+  lng           Float
+  addedById     String       @db.Uuid
+  addedBy       User         @relation(fields: [addedById], references: [id])
+  reasonId      String       @db.Uuid
+  reason        VisitReason  @relation(fields: [reasonId], references: [id])
+  note          String?
+  status        StopStatus   @default(PLANNED)
+  /// Set for stops proposed by a join request.
+  joinRequestId String?      @db.Uuid
+  joinRequest   JoinRequest? @relation(fields: [joinRequestId], references: [id])
+  arrivedAt     DateTime?    @db.Timestamptz(3)
+  departedAt    DateTime?    @db.Timestamptz(3)
+  /// True once someone tapped Arrived/Leaving; GPS detection then leaves it alone.
+  manualTimes   Boolean      @default(false)
+  /// The CRM lead this visit is for (their id there), when booked from the CRM.
+  crmLeadRef    String?
+  /// The lead's first name, for display. Nothing else about them is kept here.
+  crmLeadName   String?
+  createdAt     DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([bookingId, seq])
+  @@index([propertyId])
+  @@index([crmLeadRef])
+}
+
+model BookingPassenger {
+  bookingId     String   @db.Uuid
+  booking       Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  userId        String   @db.Uuid
+  user          User     @relation(fields: [userId], references: [id])
+  joinRequestId String?  @db.Uuid
+  addedAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([bookingId, userId])
+}
+
+model JoinRequest {
+  id               String            @id @default(uuid()) @db.Uuid
+  bookingId        String            @db.Uuid
+  booking          Booking           @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  requesterId      String            @db.Uuid
+  requester        User              @relation("JoinRequester", fields: [requesterId], references: [id])
+  reasonId         String?           @db.Uuid
+  reason           VisitReason?      @relation(fields: [reasonId], references: [id])
+  note             String?
+  proposedReturnAt DateTime?         @db.Timestamptz(3)
+  status           JoinRequestStatus @default(PENDING)
+  decidedById      String?           @db.Uuid
+  decidedBy        User?             @relation("JoinDecidedBy", fields: [decidedById], references: [id])
+  decidedAt        DateTime?         @db.Timestamptz(3)
+  rejectionReason  String?
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  stops            BookingStop[]
+
+  @@index([status])
+  @@index([bookingId])
+}
+
+// ── Trips & tracking ──────────────────────────────────────────────────────────
+
+model Trip {
+  id                   String          @id @default(uuid()) @db.Uuid
+  bookingId            String          @unique @db.Uuid
+  booking              Booking         @relation(fields: [bookingId], references: [id])
+  startedAt            DateTime        @db.Timestamptz(3)
+  endedAt              DateTime?       @db.Timestamptz(3)
+  odometerStart        Int
+  odometerEnd          Int?
+  photoStartKey        String
+  photoEndKey          String?
+  /// Gap since the car's previous end reading.
+  unloggedKm           Int             @default(0)
+  endMethod            TripEndMethod?
+  endNote              String?
+  gpsDistanceKm        Float?
+  /// Idempotency keys from the device, so offline retries don't double-apply.
+  startRequestId       String          @unique
+  endRequestId         String?         @unique
+  device               Json?
+  /// Last fix (by device time).
+  lastLat              Float?
+  lastLng              Float?
+  lastAccuracy         Float?
+  lastSeenAt           DateTime?       @db.Timestamptz(3)
+  lastBattery          Int?
+  lastAddress          String?
+  /// Last time the device reached the server (server time).
+  lastContactAt        DateTime?       @db.Timestamptz(3)
+  locationOffSince     DateTime?       @db.Timestamptz(3)
+  trackingStatus       TrackingStatus  @default(LIVE)
+  trackingStatusSince  DateTime?       @db.Timestamptz(3)
+  /// Current ETA. Starts as the booking's return time; extensions move it even
+  /// when they clash with the next booking (the car is out either way).
+  etaAt                DateTime?       @db.Timestamptz(3)
+  officeArrivedAt      DateTime?       @db.Timestamptz(3)
+  overdueNotifiedAt    DateTime?       @db.Timestamptz(3)
+  awaitingOdometerAt   DateTime?       @db.Timestamptz(3)
+  lastReminderAt       DateTime?       @db.Timestamptz(3)
+  /// Short-lived signing secret version for the trip-scoped tracking token.
+  trackingTokenVersion Int             @default(1)
+  createdAt            DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @db.Timestamptz(3)
+  points               LocationPoint[]
+  events               TrackingEvent[]
+
+  @@index([trackingStatus])
+}
+
+model LocationPoint {
+  id         BigInt                                 @id @default(autoincrement())
+  tripId     String                                 @db.Uuid
+  trip       Trip                                   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  /// Device time of the fix.
+  recordedAt DateTime                               @db.Timestamptz(3)
+  receivedAt DateTime                               @default(now()) @db.Timestamptz(3)
+  lat        Float
+  lng        Float
+  /// Generated column (see the init migration).
+  geog       Unsupported("geography(Point, 4326)")? @default(dbgenerated("(st_setsrid(st_makepoint(lng, lat), 4326))::geography"))
+  accuracy   Float?
+  speed      Float?
+  heading    Float?
+  altitude   Float?
+  battery    Int?
+  isCharging Boolean?
+  isMoving   Boolean?
+  activity   String?
+  event      String?
+  /// The plugin's UUID for the fix, to skip duplicates on re-sync.
+  uuid       String?                                @unique
+
+  @@index([tripId, recordedAt])
+}
+
+model TrackingEvent {
+  id            String            @id @default(uuid()) @db.Uuid
+  tripId        String            @db.Uuid
+  trip          Trip              @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  type          TrackingEventType
+  occurredAt    DateTime          @db.Timestamptz(3)
+  receivedAt    DateTime          @default(now()) @db.Timestamptz(3)
+  source        EventSource
+  details       Json?
+  lat           Float?
+  lng           Float?
+  clientEventId String?           @unique
+
+  @@index([tripId, occurredAt])
+}
+
+// ── Costs ─────────────────────────────────────────────────────────────────────
+
+model FuelEntry {
+  id          String        @id @default(uuid()) @db.Uuid
+  carId       String        @db.Uuid
+  car         Car           @relation(fields: [carId], references: [id])
+  type        FuelEntryType @default(FILL_UP)
+  /// Fill-up date, or the first day of the month for a monthly entry.
+  date        DateTime      @db.Timestamptz(3)
+  litres      Decimal       @db.Decimal(10, 2)
+  amount      Decimal       @db.Decimal(12, 2)
+  currency    String        @default("KES")
+  odometer    Int?
+  receiptKey  String?
+  notes       String?
+  enteredById String        @db.Uuid
+  enteredBy   User          @relation(fields: [enteredById], references: [id])
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+
+  @@index([carId, date])
+}
+
+// ── Platform ──────────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String              @id @default(uuid()) @db.Uuid
+  userId    String              @db.Uuid
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel   NotificationChannel
+  type      String
+  title     String
+  body      String
+  /// Deep link inside the app, e.g. /bookings/<id>.
+  link      String?
+  payload   Json?
+  status    NotificationStatus  @default(PENDING)
+  error     String?
+  readAt    DateTime?           @db.Timestamptz(3)
+  sentAt    DateTime?           @db.Timestamptz(3)
+  createdAt DateTime            @default(now()) @db.Timestamptz(3)
+
+  @@index([userId, channel, createdAt])
+}
+
+model PushSubscription {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind       PushKind
+  /// Web Push endpoint URL or FCM registration token.
+  endpoint   String    @unique
+  keys       Json?
+  platform   String?
+  userAgent  String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  lastUsedAt DateTime? @db.Timestamptz(3)
+}
+
+model AuditLog {
+  id       String   @id @default(uuid()) @db.Uuid
+  actorId  String?  @db.Uuid
+  actor    User?    @relation(fields: [actorId], references: [id])
+  action   String
+  entity   String
+  entityId String?
+  before   Json?
+  after    Json?
+  ip       String?
+  at       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([entity, entityId])
+  @@index([at])
+}
+
+model Setting {
+  key         String   @id
+  value       Json
+  updatedById String?  @db.Uuid
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+}
