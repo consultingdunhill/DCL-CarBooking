@@ -1,7 +1,7 @@
 import { addDaysToDateKey, CRM_PROPERTY_PREFIX, decodePolyline, fmtDuration, shortName, type LatLng, type PropertyService } from '@carbooking/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Car as CarIcon, CheckCircle2, ChevronRight, Clock, Contact, Crosshair, Hand, MapPin, Route, UserRound, Users } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, ArrowLeft, Car as CarIcon, Check, CheckCircle2, ChevronDown, ChevronRight, Clock, Contact, Crosshair, Hand, MapPin, Route, UserRound, Users } from 'lucide-react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { ContactButtons } from '@/components/ContactButtons';
@@ -11,7 +11,7 @@ import { StopList, stopProblem, type DraftStop } from '@/components/booking/Stop
 import { MapView, type MapMarker, type MapPolyline } from '@/components/map/MapView';
 import { Badge, BookingStatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Field, Input, Select, Switch, Textarea } from '@/components/ui/form';
+import { Field, Input, Switch, Textarea } from '@/components/ui/form';
 import { EmptyState, PageLoader, Spinner } from '@/components/ui/misc';
 import { ApiError, errorMessage, get, post, qs } from '@/lib/api';
 import { useAuth, useMe } from '@/lib/auth';
@@ -48,6 +48,129 @@ function CrmLeadCard({ lead, loading, error }: { lead?: CrmLead; loading: boolea
         </p>
         {lead.properties.length === 0 && <p className="mt-1 text-xs">No listings are ticked for them in the CRM. Add the stops yourself.</p>}
       </div>
+    </div>
+  );
+}
+
+function BookForSelect({
+  users,
+  value,
+  onChange,
+  id,
+  invalid,
+  describedBy,
+}: {
+  users: AdminUser[];
+  value: string;
+  onChange: (id: string) => void;
+  id: string;
+  invalid?: boolean;
+  describedBy?: string;
+}) {
+  const listId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const choices = [{ id: '', name: 'Me' }, ...users.map((user) => ({ id: user.id, name: user.name }))];
+  const selectedIndex = Math.max(0, choices.findIndex((choice) => choice.id === value));
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const choose = (userId: string) => {
+    onChange(userId);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        id={id}
+        type="button"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-haspopup="listbox"
+        aria-activedescendant={open ? `${listId}-${activeIndex}` : undefined}
+        aria-invalid={invalid}
+        aria-describedby={describedBy}
+        onClick={() => {
+          setActiveIndex(selectedIndex);
+          setOpen((isOpen) => !isOpen);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (!open) {
+              setActiveIndex(selectedIndex);
+              setOpen(true);
+            } else {
+              setActiveIndex((index) =>
+                event.key === 'ArrowDown' ? Math.min(choices.length - 1, index + 1) : Math.max(0, index - 1),
+              );
+            }
+          } else if (event.key === 'Enter' || event.key === ' ') {
+            if (open) {
+              event.preventDefault();
+              choose(choices[activeIndex]?.id ?? '');
+            } else {
+              event.preventDefault();
+              setOpen(true);
+            }
+          } else if (event.key === 'Escape') {
+            setOpen(false);
+          }
+        }}
+        className={cn(
+          'flex h-12 w-full items-center gap-3 rounded-xl border border-border bg-surface-2 px-3 text-left text-sm text-fg transition-colors',
+          'hover:bg-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+          invalid && 'border-danger',
+        )}
+      >
+        <UserRound className="size-4 shrink-0 text-muted-fg" />
+        <span className="min-w-0 flex-1 truncate">{choices[selectedIndex]?.name}</span>
+        <ChevronDown className={cn('size-4 shrink-0 text-muted-fg transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div
+          id={listId}
+          role="listbox"
+          aria-labelledby={id}
+          className="absolute inset-x-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-xl border border-border bg-surface py-1 shadow-float"
+        >
+          {choices.map((choice, index) => (
+            <div
+              key={choice.id || 'me'}
+              id={`${listId}-${index}`}
+              role="option"
+              aria-selected={choice.id === value}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => choose(choice.id)}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2.5 text-sm transition-colors',
+                index === activeIndex ? 'bg-muted' : 'hover:bg-muted',
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate">{choice.name}</span>
+              {choice.id === value && <Check className="size-4 shrink-0 text-primary" />}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -486,16 +609,14 @@ export function BookPage() {
             {isAdmin && (
               <Field label="Book for" className="mt-3" hint={bookingFor ? `Approved straight away. ${shortName(bookingFor.name)} is notified and runs the trip.` : 'Book on a colleague\'s behalf, e.g. after a phone call.'}>
                 {(p) => (
-                  <Select {...p} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
-                    <option value="">Me</option>
-                    {staff.data
-                      ?.filter((u) => u.active && u.id !== me.id)
-                      .map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name}
-                        </option>
-                      ))}
-                  </Select>
+                  <BookForSelect
+                    users={staff.data?.filter((user) => user.active && user.id !== me.id) ?? []}
+                    value={ownerId}
+                    onChange={setOwnerId}
+                    id={p.id}
+                    invalid={p['aria-invalid']}
+                    describedBy={p['aria-describedby']}
+                  />
                 )}
               </Field>
             )}
@@ -644,7 +765,7 @@ export function BookPage() {
         )}
       >
         <div className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-border lg:hidden" />
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-4 lg:px-5 lg:pt-5">{content}</div>
+        <div className="scrollbar-subtle min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-4 lg:px-5 lg:pt-5">{content}</div>
         <div className="safe-bottom flex gap-2 border-t border-border px-4 py-3 lg:px-5">
           {showBack && (
             <Button size="lg" variant="secondary" onClick={back} aria-label="Back">
@@ -657,4 +778,3 @@ export function BookPage() {
     </div>
   );
 }
-

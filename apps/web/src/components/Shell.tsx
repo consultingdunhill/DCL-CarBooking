@@ -131,7 +131,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <img src="/icon.svg" alt="" className="size-8" />
         <span className="text-lg font-semibold tracking-tight">{ENV.appName}</span>
       </div>
-      <nav className="scroll-shadow flex-1 space-y-5 overflow-y-auto px-3 pb-4 lg:space-y-4">
+      <nav className="scroll-shadow scrollbar-subtle flex-1 space-y-5 overflow-y-auto px-3 pb-4 lg:space-y-4">
         {groups.map((g) => (
           <div key={g.title}>
             <div className="mb-1 px-3 text-[11px] font-semibold tracking-wider text-muted-fg/80 uppercase">{g.title}</div>
