@@ -1,0 +1,114 @@
+# Fleet in production, on the server it shares with the CRM. Walkthrough: docs/DEPLOY.md.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Reads .env beside this file. Only the web container is published, on loopback; the
+# server's own nginx terminates TLS in front of it. The API applies any pending database
+# migrations each time it starts, before it listens.
+name: fleet
+
+x-server: &server
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile
+    target: server
+  image: fleet-server
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: postgresql://fleet:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/fleet?schema=public
+    STORAGE_LOCAL_DIR: /data/storage
+    WHATSAPP_AUTH_DIR: /data/whatsapp-auth
+  volumes:
+    - storage:/data/storage
+    - whatsapp-auth:/data/whatsapp-auth
+  networks:
+    - default
+    - crm
+
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fleet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: fleet
+      TZ: UTC
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # The migrations create the extensions themselves, as they would on a managed server.
+      - ./packages/db/docker/skip-postgis-init.sh:/docker-entrypoint-initdb.d/10_postgis.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleet -d fleet"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Not published; only the API and worker reach it. Its own database, apart from the CRM's.
+    expose:
+      - "5432"
+
+  api:
+    <<: *server
+    command: >-
+      sh -c "cd packages/db && ./node_modules/.bin/prisma migrate deploy
+      && cd /app && exec node apps/api/dist/index.js"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  worker:
+    <<: *server
+    command: ["node", "apps/worker/dist/index.js"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: web
+      args:
+        VITE_API_URL: /api
+        VITE_AUTH_MODE: ${VITE_AUTH_MODE:-entra}
+        VITE_ENTRA_CLIENT_ID: ${VITE_ENTRA_CLIENT_ID:-}
+        VITE_ENTRA_TENANT_ID: ${VITE_ENTRA_TENANT_ID:-}
+        VITE_ENTRA_API_SCOPE: ${VITE_ENTRA_API_SCOPE:-}
+        VITE_ENTRA_NATIVE_REDIRECT: ${VITE_ENTRA_NATIVE_REDIRECT:-ke.co.fleet.app://auth}
+        VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+        VITE_GOOGLE_MAPS_MAP_ID: ${VITE_GOOGLE_MAPS_MAP_ID:-}
+        VITE_VAPID_PUBLIC_KEY: ${VITE_VAPID_PUBLIC_KEY:-}
+        VITE_ALLOW_WEB_TRIPS: ${VITE_ALLOW_WEB_TRIPS:-false}
+        VITE_APP_NAME: ${VITE_APP_NAME:-Fleet}
+    image: fleet-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    # Loopback only: the server's nginx publishes it as fleet.erp.dunhill-ticketing.com.
+    ports:
+      - "127.0.0.1:${FLEET_BIND_PORT:-8090}:80"
+
+volumes:
+  pgdata:
+  # Odometer and receipt photos (STORAGE_DRIVER=local). Back it up with the database.
+  storage:
+  # The linked WhatsApp session, when WHATSAPP_PROVIDER=baileys. Never copy it between servers.
+  whatsapp-auth:
+
+networks:
+  default:
+  # Shared with the CRM's app container, which joins it under the alias `crm`. Fleet calls
+  # it at http://crm:8000 without going out to the internet. Create it once on the server:
+  #   docker network create dunhill-internal
+  crm:
+    external: true
+    name: ${CRM_NETWORK:-dunhill-internal}

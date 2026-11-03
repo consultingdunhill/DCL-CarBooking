@@ -85,11 +85,13 @@ The API tests cover the acceptance scenarios in DEVELOPMENT_PLAN §8 that don't 
 
 ## Production checklist
 
-1. Azure (South Africa North): App Service for API + worker + static web, PostgreSQL Flexible Server with `postgis` and `btree_gist` allow-listed, Blob Storage container.
+Fleet is hosted with Docker on the server it shares with the CRM. The step-by-step runbook is [docs/DEPLOY.md](docs/DEPLOY.md). The checklist below is what it needs.
+
+1. Hosting: [docker-compose.prod.yml](docker-compose.prod.yml) on the ERP server (217.216.77.107), with its own PostGIS database, behind the server's nginx at fleet.erp.dunhill-ticketing.com. Azure (App Service, PostgreSQL Flexible Server with `postgis` and `btree_gist`, Blob Storage) remains an option later; `STORAGE_DRIVER=azure` is already supported.
 2. Entra app registrations: API (expose a scope, app roles **Staff** and **Admin**) and SPA/mobile client (redirects: web origin, `ke.co.fleet.app://auth`). Set `AUTH_MODE=entra` and the `ENTRA_*` / `VITE_ENTRA_*` variables.
 3. Google Cloud: browser key restricted by referrer and app IDs; server key for Routes/Geocoding; budget alerts.
 4. Generate `APP_SECRET` (32+ random bytes) and VAPID keys; add FCM service account, Graph mail credentials, SMS provider. For WhatsApp via Baileys, give the worker a persistent `WHATSAPP_AUTH_DIR` (e.g. `/home/whatsapp` on App Service), run **one** worker instance, and link a dedicated company number. It is an unofficial client: WhatsApp can block numbers it considers automated.
-5. `pnpm db:migrate` (deploys migrations), then `pnpm build`; run `apps/api/dist/index.js` and `apps/worker/dist/index.js`.
+5. Migrations apply themselves when the API container starts. Without Docker: `pnpm db:migrate`, then `pnpm build`, and run `apps/api/dist/index.js` and `apps/worker/dist/index.js`.
 6. Mobile: see [apps/mobile/README.md](apps/mobile/README.md) (Transistorsoft licence, store accounts, background-location justification).
 
 ## Open questions (from the plan)

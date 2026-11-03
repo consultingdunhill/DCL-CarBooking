@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+.git
+.env
+.env.*
+!.env.example
+apps/api/storage
+.whatsapp-auth
+apps/mobile/android
+apps/mobile/ios
+**/*.log
+**/coverage
