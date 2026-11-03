@@ -21,11 +21,11 @@
   },
   "dependencies": {
     "@carbooking/core": "workspace:*",
-    "@prisma/client": "~6.19.3"
+    "@prisma/client": "~6.19.3",
+    "prisma": "~6.19.3"
   },
   "devDependencies": {
     "dotenv-cli": "^8.0.0",
-    "prisma": "~6.19.3",
     "tsx": "^4.23.15"
   }
 }
