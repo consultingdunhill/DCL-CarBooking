@@ -90,7 +90,6 @@ describe('crmViewings', () => {
     seq,
     status: 'PLANNED',
     crmLeadRef: null,
-    label: null,
     address: `Stop ${seq}`,
     arrivedAt: null,
     departedAt: null,
@@ -103,7 +102,7 @@ describe('crmViewings', () => {
     startAt: at('09:00'),
     ownerEmail: ' Jane@Test.ke ',
     trip: null,
-    stops: [stop(1, { crmLeadRef: '42', propertyCrmRef: 'dq:7', label: 'Listing 7' }), stop(2)],
+    stops: [stop(1, { crmLeadRef: '42', propertyCrmRef: 'dq:7', address: 'Listing 7, Parklands' }), stop(2)],
     ...over,
   });
 
@@ -118,7 +117,7 @@ describe('crmViewings', () => {
         stop_id: 's1',
         lead_id: 42,
         property_ref: 'dq:7',
-        place: 'Listing 7',
+        place: 'Listing 7, Parklands',
         agent_email: 'jane@test.ke',
         reason: 'Sales viewing',
         counts_as_viewing: true,

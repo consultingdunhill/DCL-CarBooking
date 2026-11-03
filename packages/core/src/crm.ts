@@ -104,6 +104,7 @@ export interface CrmViewing {
   lead_id: number;
   /** "dq:<id>" when the stop is one of the CRM's own listings. */
   property_ref: string | null;
+  /** The stop's address: a listing's title and area, or wherever the errand was. */
   place: string;
   /** The trip owner, matched to a CRM agent by work email. */
   agent_email: string | null;
@@ -127,7 +128,6 @@ export interface CrmViewingBooking {
     seq: number;
     status: StopStatus;
     crmLeadRef: string | null;
-    label: string | null;
     address: string;
     arrivedAt: Date | null;
     departedAt: Date | null;
@@ -157,7 +157,7 @@ export function crmViewings(b: CrmViewingBooking, split: StopCostSplit): CrmView
       stop_id: s.id,
       lead_id: Number(s.crmLeadRef),
       property_ref: s.propertyCrmRef?.startsWith(CRM_PROPERTY_PREFIX) ? s.propertyCrmRef : null,
-      place: s.label?.trim() || s.address,
+      place: s.address,
       agent_email: b.ownerEmail?.trim().toLowerCase() || null,
       reason: s.reason.label,
       counts_as_viewing: s.reason.countsAsViewing,

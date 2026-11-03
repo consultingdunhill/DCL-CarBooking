@@ -163,7 +163,6 @@ export async function pushCrmViewings(now = new Date()): Promise<CrmViewingsPush
           seq: true,
           status: true,
           crmLeadRef: true,
-          label: true,
           address: true,
           arrivedAt: true,
           departedAt: true,
