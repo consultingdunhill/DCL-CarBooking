@@ -8,6 +8,8 @@ export * from './channels';
 export * from './geocode';
 export * from './bookings';
 export * from './tracking';
+export * from './trackers';
+export * from './tracker-sync';
 export * from './monitor';
 export * from './whatsapp';
 export * from './crm';

@@ -4,6 +4,7 @@ import { pgConnectionString } from './env';
 export const QUEUES = {
   dispatch: 'notify.dispatch',
   trackingMonitor: 'trips.tracking-monitor',
+  trackerSync: 'trips.tracker-sync',
   overdue: 'trips.overdue',
   noShow: 'bookings.no-show',
   awaitingOdometer: 'trips.awaiting-odometer',

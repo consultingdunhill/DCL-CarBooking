@@ -1,4 +1,4 @@
-import { decodePolyline, type LatLng, type TrackingEventType } from '@carbooking/core';
+import { compareTrack, decodePolyline, type LatLng, type TrackingEventType } from '@carbooking/core';
 import { useQuery } from '@tanstack/react-query';
 import {
   AlarmClock,
@@ -159,6 +159,7 @@ export function TripDetailPage() {
           <SummaryCards t={t} now={now} />
         </div>
         <div className="min-w-0 space-y-4 lg:col-start-1 lg:row-start-2">
+          <RouteAccuracyCard t={t} />
           <StopsCard t={t} />
           <TimelineCard
             t={t}
@@ -428,6 +429,69 @@ function RouteCard({
           </li>
         </ul>
       </div>
+    </Card>
+  );
+}
+
+// ── Route accuracy (tracker vs planned) ─────────────────────────────────────────
+
+/** The tracker's actual path measured against the booking's planned route. */
+function RouteAccuracyCard({ t }: { t: TripDetail }) {
+  const fmt = useFormat();
+  const office = useReference().data?.office ?? null;
+  const cmp = useMemo(() => {
+    const planned = t.booking.plannedPolyline ? decodePolyline(t.booking.plannedPolyline) : [];
+    if (planned.length < 2 || t.points.length < 2) return null;
+    const fixes = t.points.map((p) => ({ lat: p.lat, lng: p.lng, recordedAt: new Date(p.recordedAt), accuracy: p.accuracy }));
+    const places: LatLng[] = activeStops(t.booking.stops).map((s) => ({ lat: s.lat, lng: s.lng }));
+    if (office) places.push({ lat: office.lat, lng: office.lng });
+    return compareTrack(fixes, planned, places);
+  }, [t.booking.plannedPolyline, t.points, t.booking.stops, office]);
+
+  if (!cmp) return null;
+  const strayed = cmp.onRoutePct < 85 || cmp.unexpectedStops.length > 0;
+
+  return (
+    <Card>
+      <CardHeader title="Route accuracy" description="The tracker's actual path measured against the planned route." />
+      <CardBody className="space-y-3">
+        <Dl
+          className="tabular"
+          items={[
+            ['On route', `${cmp.onRoutePct.toFixed(0)}% of fixes within 150 m`],
+            ['Worst deviation', `${Math.round(cmp.maxDeviationM).toLocaleString()} m`],
+            ['Average deviation', `${Math.round(cmp.avgDeviationM).toLocaleString()} m`],
+            [
+              'Actual vs planned',
+              cmp.extraKm == null ? '–' : `${fmt.km(cmp.actualKm)} vs ${fmt.km(cmp.plannedKm)} (${cmp.extraKm >= 0 ? '+' : '−'}${fmt.km(Math.abs(cmp.extraKm))})`,
+            ],
+            ['Detours', cmp.offRouteExcursions === 0 ? 'None' : String(cmp.offRouteExcursions)],
+            ['Unexpected stops', cmp.unexpectedStops.length === 0 ? 'None' : String(cmp.unexpectedStops.length)],
+          ]}
+        />
+        {cmp.unexpectedStops.length > 0 && (
+          <ul className="space-y-1.5 text-sm">
+            {cmp.unexpectedStops.map((s, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <MapPinOff className="mt-0.5 size-4 shrink-0 text-warning" />
+                <span className="tabular">
+                  <a href={googleMapsLink(s.lat, s.lng)} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">
+                    {fmt.time(s.startedAt.toISOString())}
+                  </a>{' '}
+                  — stopped {fmt.duration(s.minutes)}, {Math.round(s.deviationM).toLocaleString()} m off route
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {strayed && (
+          <Callout tone="warning">
+            {cmp.unexpectedStops.length > 0
+              ? `The car stopped ${cmp.unexpectedStops.length} time${cmp.unexpectedStops.length > 1 ? 's' : ''} away from the planned route.`
+              : `Only ${cmp.onRoutePct.toFixed(0)}% of the track stayed on the planned route.`}
+          </Callout>
+        )}
+      </CardBody>
     </Card>
   );
 }

@@ -226,6 +226,7 @@ export const CarSchema = z.object({
   fuelType: z.enum(FUEL_TYPES),
   status: z.enum(CAR_STATUSES).default('AVAILABLE'),
   currentOdometer: odometer,
+  trackerDeviceId: optText(60),
   homeOfficeId: id.nullish(),
   notes: optText(1000),
 });

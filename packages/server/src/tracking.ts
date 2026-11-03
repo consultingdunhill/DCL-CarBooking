@@ -153,7 +153,12 @@ export async function refreshTrackingStatus(tripId: string, now = new Date()) {
  * offline), then update the trip's last position, status, stop times and
  * office arrival.
  */
-export async function ingestLocations(tripId: string, locations: DeviceLocation[], now = new Date()) {
+export async function ingestLocations(
+  tripId: string,
+  locations: DeviceLocation[],
+  now = new Date(),
+  source: 'PHONE' | 'TRACKER' = 'PHONE',
+) {
   const trip = await loadTrip(tripId);
   if (!trip) return { accepted: 0 };
   const s = await getSettings();
@@ -168,6 +173,7 @@ export async function ingestLocations(tripId: string, locations: DeviceLocation[
     if (recordedAt.getTime() > now.getTime() + 5 * MINUTE) continue;
     rows.push({
       tripId,
+      source,
       recordedAt,
       lat: l.coords.latitude,
       lng: l.coords.longitude,

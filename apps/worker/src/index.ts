@@ -1,6 +1,7 @@
 /**
  * Background jobs (pg-boss, on the app database):
  *  - tracking monitor: heartbeat → Offline / Tracking lost; office arrival → AWAITING_ODOMETER
+ *  - tracker sync: pull hardware-tracker fixes for running trips (when TRACKER_PROVIDER is set)
  *  - overdue: ETA + grace → push owner, then admins by push + SMS/WhatsApp
  *  - no-show: not started within the window → released
  *  - awaiting-odometer reminders
@@ -20,6 +21,7 @@ import {
   runGpsRetention,
   runNoShowCheck,
   runOverdueCheck,
+  runTrackerSync,
   runTrackingMonitor,
   startWhatsapp,
   stopBoss,
@@ -47,6 +49,7 @@ const periodic = (name: string, fn: (now: Date) => Promise<unknown>) => async ()
 // Cron runs at most once a minute; every minute is right for a 5-minute heartbeat.
 const schedules: [string, string, (now: Date) => Promise<unknown>][] = [
   [QUEUES.trackingMonitor, '* * * * *', runTrackingMonitor],
+  [QUEUES.trackerSync, '* * * * *', runTrackerSync],
   [QUEUES.overdue, '* * * * *', runOverdueCheck],
   [QUEUES.noShow, '* * * * *', runNoShowCheck],
   [QUEUES.awaitingOdometer, '*/5 * * * *', async (now) => {

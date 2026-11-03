@@ -160,6 +160,7 @@ function CarDialog({ car, onClose }: { car: Car | null; onClose: () => void }) {
     fuelType: (car?.fuelType ?? 'PETROL') as FuelType,
     status: (car?.status ?? 'AVAILABLE') as CarStatus,
     currentOdometer: str(car?.currentOdometer),
+    trackerDeviceId: car?.trackerDeviceId ?? '',
     notes: car?.notes ?? '',
   });
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -186,6 +187,7 @@ function CarDialog({ car, onClose }: { car: Car | null; onClose: () => void }) {
       fuelType: f.fuelType,
       status: f.status,
       currentOdometer: numOrUndef(f.currentOdometer),
+      trackerDeviceId: textOrNull(f.trackerDeviceId),
       notes: textOrNull(f.notes),
       homeOfficeId: car?.homeOfficeId ?? undefined,
     });
@@ -262,6 +264,14 @@ function CarDialog({ car, onClose }: { car: Car | null; onClose: () => void }) {
           hint={car ? 'The last recorded end reading. Trips update it; only correct it if it is wrong.' : 'The reading on the dashboard now.'}
         >
           {(p) => <UnitInput {...p} unit="km" type="number" inputMode="numeric" min={0} step={1} value={f.currentOdometer} onChange={(e) => set('currentOdometer', e.target.value)} />}
+        </Field>
+        <Field
+          label="GPS tracker ID"
+          error={errors.trackerDeviceId}
+          className="sm:col-span-2"
+          hint="The hardware tracker's SystemNo (from the Oversee portal). Leave blank if this car has no tracker fitted."
+        >
+          {(p) => <Input {...p} value={f.trackerDeviceId} onChange={(e) => set('trackerDeviceId', e.target.value)} placeholder="e.g. the device SystemNo" />}
         </Field>
         <Field label="Notes" error={errors.notes} className="sm:col-span-2">
           {(p) => <Textarea {...p} value={f.notes} onChange={(e) => set('notes', e.target.value)} rows={2} />}
