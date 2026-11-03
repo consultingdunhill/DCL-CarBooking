@@ -146,9 +146,9 @@ async function main() {
   const staff = [jane, tom, amina, brian];
 
   const cars = [
-    await prisma.car.create({ data: { registration: 'KDA 123A', make: 'Toyota', model: 'Axio', color: 'Silver', seats: 5, fuelType: 'PETROL', homeOfficeId: office.id, currentOdometer: 84_210 } }),
-    await prisma.car.create({ data: { registration: 'KDB 456B', make: 'Toyota', model: 'Fielder', color: 'White', seats: 5, fuelType: 'PETROL', homeOfficeId: office.id, currentOdometer: 61_870 } }),
-    await prisma.car.create({ data: { registration: 'KDC 789C', make: 'Nissan', model: 'X-Trail', color: 'Grey', seats: 7, fuelType: 'DIESEL', status: 'MAINTENANCE', homeOfficeId: office.id, currentOdometer: 102_450 } }),
+    await prisma.car.create({ data: { registration: 'KDA 123A', make: 'Toyota', model: 'Axio', color: 'Silver', seats: 5, fuelType: 'PETROL', homeOfficeId: office.id, currentOdometer: 84_210, trackerDeviceId: 'MOCK-KDA-123A' } }),
+    await prisma.car.create({ data: { registration: 'KDB 456B', make: 'Toyota', model: 'Fielder', color: 'White', seats: 5, fuelType: 'PETROL', homeOfficeId: office.id, currentOdometer: 61_870, trackerDeviceId: 'MOCK-KDB-456B' } }),
+    await prisma.car.create({ data: { registration: 'KDC 789C', make: 'Nissan', model: 'X-Trail', color: 'Grey', seats: 7, fuelType: 'DIESEL', status: 'MAINTENANCE', homeOfficeId: office.id, currentOdometer: 102_450, trackerDeviceId: 'MOCK-KDC-789C' } }),
   ];
 
   const reasons = await Promise.all(REASONS.map((r, i) => prisma.visitReason.create({ data: { ...r, sortOrder: i } })));

@@ -129,6 +129,36 @@ export function decodePolyline(encoded: string): LatLng[] {
   return points;
 }
 
+/** Summed great-circle length of a polyline, in km (no filtering). */
+export function polylineLengthKm(path: LatLng[]): number {
+  let m = 0;
+  for (let i = 1; i < path.length; i++) m += haversineM(path[i - 1]!, path[i]!);
+  return m / 1000;
+}
+
+/** Metres from point p to the segment a–b, on a local equirectangular projection around a. */
+export function pointToSegmentM(p: LatLng, a: LatLng, b: LatLng): number {
+  const cosLat = Math.cos(toRad(a.lat));
+  const xy = (pt: LatLng) => ({ x: toRad(pt.lng - a.lng) * cosLat * EARTH_RADIUS_M, y: toRad(pt.lat - a.lat) * EARTH_RADIUS_M });
+  const P = xy(p);
+  const B = xy(b); // a is the origin (0,0)
+  const len2 = B.x * B.x + B.y * B.y;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, (P.x * B.x + P.y * B.y) / len2));
+  return Math.hypot(P.x - t * B.x, P.y - t * B.y);
+}
+
+/** Shortest distance (metres) from a point to a polyline. Infinity for an empty path. */
+export function distanceToPathM(p: LatLng, path: LatLng[]): number {
+  if (path.length === 0) return Infinity;
+  if (path.length === 1) return haversineM(p, path[0]!);
+  let min = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const d = pointToSegmentM(p, path[i - 1]!, path[i]!);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
 /** Rough road distance and duration when no routing service is configured. */
 export function estimateRoute(waypoints: LatLng[], opts: { roadFactor?: number; avgSpeedKmh?: number } = {}) {
   const roadFactor = opts.roadFactor ?? 1.35;

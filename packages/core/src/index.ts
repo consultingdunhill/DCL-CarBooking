@@ -3,6 +3,7 @@ export * from './errors';
 export * from './settings';
 export * from './time';
 export * from './geo';
+export * from './track-compare';
 export * from './booking';
 export * from './trip';
 export * from './zones';

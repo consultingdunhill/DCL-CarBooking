@@ -114,6 +114,11 @@ enum EventSource {
   SERVER
 }
 
+enum LocationSource {
+  PHONE
+  TRACKER
+}
+
 enum ClientType {
   VENDOR
   LANDLORD
@@ -274,6 +279,8 @@ model Car {
   homeOffice      Office?     @relation(fields: [homeOfficeId], references: [id])
   /// Last recorded end odometer reading (km).
   currentOdometer Int         @default(0)
+  /// Hardware GPS tracker fitted to this car (e.g. Oversee device id / IMEI). Null = no tracker.
+  trackerDeviceId String?     @unique
   notes           String?
   createdAt       DateTime    @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime    @updatedAt @db.Timestamptz(3)
@@ -568,6 +575,8 @@ model LocationPoint {
   isMoving   Boolean?
   activity   String?
   event      String?
+  /// Where this fix came from: the trip owner's phone, or the car's hardware tracker.
+  source     LocationSource                         @default(PHONE)
   /// The plugin's UUID for the fix, to skip duplicates on re-sync.
   uuid       String?                                @unique
 

@@ -187,7 +187,7 @@ export function CalendarPage() {
 
     const cars = [...(ref.data?.cars ?? [])];
     for (const b of list ?? []) {
-      if (!cars.some((c) => c.id === b.carId)) cars.push({ ...b.car, fuelType: 'PETROL', currentOdometer: 0, homeOfficeId: null, notes: null, seats: b.car.seats });
+      if (!cars.some((c) => c.id === b.carId)) cars.push({ ...b.car, fuelType: 'PETROL', currentOdometer: 0, trackerDeviceId: null, homeOfficeId: null, notes: null, seats: b.car.seats });
     }
     const rows: Row[] = cars.map((c) => ({
       id: c.id,

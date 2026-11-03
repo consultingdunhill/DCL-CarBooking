@@ -38,6 +38,18 @@ const EnvSchema = z.object({
 
   GOOGLE_MAPS_SERVER_KEY: opt,
 
+  // ── Hardware GPS trackers ─────────────────────────────────────────────────────
+  /** none = off (phone GPS only); mock = synthetic fixes for dev; oversee = Oversee Tracking. */
+  TRACKER_PROVIDER: z.enum(['none', 'mock', 'oversee']).default('none'),
+  /** Oversee's command endpoint (recovered from its web client). */
+  OVERSEE_API_URL: z.string().default('https://api.overseetracking.com:9090/WebProcessorApi.ashx'),
+  OVERSEE_USERNAME: opt,
+  OVERSEE_PASSWORD: opt,
+  /** LanguageType GUID the portal sends on every call; default is the one its web client uses. */
+  OVERSEE_LANGUAGE_TYPE: z.string().default('2B72ABC6-19D7-4653-AAEE-0BE542026D46'),
+  /** Minutes to subtract from Oversee's zone-less DateTime to reach UTC. Verify on first live connect. */
+  OVERSEE_TZ_OFFSET_MIN: z.coerce.number().int().default(0),
+
   STORAGE_DRIVER: z.enum(['local', 'azure']).default('local'),
   STORAGE_LOCAL_DIR: opt,
   AZURE_STORAGE_ACCOUNT: opt,
@@ -86,6 +98,9 @@ function parseEnv(): Env {
   }
   if (env.AUTH_MODE === 'entra' && (!env.ENTRA_TENANT_ID || !env.ENTRA_API_AUDIENCE)) {
     throw new Error('AUTH_MODE=entra needs ENTRA_TENANT_ID and ENTRA_API_AUDIENCE');
+  }
+  if (env.TRACKER_PROVIDER === 'oversee' && (!env.OVERSEE_USERNAME || !env.OVERSEE_PASSWORD)) {
+    throw new Error('TRACKER_PROVIDER=oversee needs OVERSEE_USERNAME and OVERSEE_PASSWORD');
   }
   return env;
 }

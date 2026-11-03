@@ -63,6 +63,7 @@ export interface Car {
   fuelType: FuelType;
   status: CarStatus;
   currentOdometer: number;
+  trackerDeviceId: string | null;
   homeOfficeId: string | null;
   notes: string | null;
 }
