@@ -1,4 +1,4 @@
-import type { StopCostSplit } from './enums';
+import type { StopCostSplit, StopStatus } from './enums';
 import { addMonths, HOUR, monthKey } from './time';
 
 // ── Fuel efficiency & cost per km ─────────────────────────────────────────────
@@ -167,6 +167,9 @@ export function rateAt(
 
 // ── Trip & stop cost ──────────────────────────────────────────────────────────
 
+/** Stops that took place on a trip that ran: a planned stop counts even with no arrival recorded. */
+export const STOPS_THAT_HAPPENED: StopStatus[] = ['PLANNED', 'ARRIVED', 'DEPARTED'];
+
 export interface CostStopInput {
   id: string;
   arrivedAt: Date | null;
@@ -216,7 +219,8 @@ export interface TripCost {
   stops: StopCost[];
 }
 
-function dwellHours(stop: CostStopInput, startedAt: Date, endedAt: Date): number {
+/** Hours spent at a stop, clipped to the trip. Zero without both an arrival and a departure. */
+export function dwellHours(stop: CostStopInput, startedAt: Date, endedAt: Date): number {
   if (!stop.arrivedAt || !stop.departedAt) return 0;
   const a = Math.max(stop.arrivedAt.getTime(), startedAt.getTime());
   const d = Math.min(stop.departedAt.getTime(), endedAt.getTime());

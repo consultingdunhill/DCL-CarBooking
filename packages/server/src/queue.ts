@@ -10,6 +10,7 @@ export const QUEUES = {
   awaitingOdometer: 'trips.awaiting-odometer',
   retention: 'gps.retention',
   crmSync: 'crm.sync',
+  crmViewings: 'crm.push-viewings',
 } as const;
 
 let boss: PgBoss | null = null;

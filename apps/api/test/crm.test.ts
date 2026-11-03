@@ -1,8 +1,9 @@
 /**
  * The Dunhill CRM link, against a fake CRM: "Book a car" on a lead fills in a booking,
- * and the nightly sync mirrors the CRM's portfolio without trampling our own edits.
+ * the nightly sync mirrors the CRM's portfolio without trampling our own edits, and
+ * viewings go back to the CRM as they change.
  */
-import { env, stopBoss } from '@carbooking/server';
+import { CrmUnavailable, env, pushCrmViewings, stopBoss } from '@carbooking/server';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp, loginAs, prisma, seedBasics, type Client } from './helpers';
@@ -20,7 +21,15 @@ const listing = (id: number, over: Record<string, unknown> = {}) => ({
 });
 
 /** What the fake CRM holds; each test edits it. */
-let crm: { listings: ReturnType<typeof listing>[]; leads: Record<number, unknown>; down: boolean };
+let crm: {
+  listings: ReturnType<typeof listing>[];
+  leads: Record<number, unknown>;
+  down: boolean;
+  /** Viewings received, by booking id: the last set each booking sent. */
+  viewings: Record<string, any[]>;
+  /** Booking ids the CRM answers 422 for. */
+  refuse: Set<string>;
+};
 const seen: { url: string; auth: string | null }[] = [];
 
 beforeAll(async () => {
@@ -44,6 +53,8 @@ beforeEach(async () => {
       },
     },
     down: false,
+    viewings: {},
+    refuse: new Set(),
   };
   seen.length = 0;
   vi.stubGlobal('fetch', async (input: string | URL, init?: RequestInit) => {
@@ -54,6 +65,12 @@ beforeEach(async () => {
     if (url.pathname === '/api/integrations/fleet/properties') return json(200, { properties: crm.listings });
     const lead = url.pathname.match(/^\/api\/integrations\/fleet\/leads\/(\d+)$/);
     if (lead) return crm.leads[Number(lead[1])] ? json(200, crm.leads[Number(lead[1])]) : json(404, { detail: 'Not found' });
+    const viewings = url.pathname.match(/^\/api\/integrations\/fleet\/bookings\/([\w-]+)\/viewings$/);
+    if (viewings && init?.method === 'PUT') {
+      if (crm.refuse.has(viewings[1]!)) return json(422, { detail: 'refused' });
+      crm.viewings[viewings[1]!] = JSON.parse(String(init.body)).viewings;
+      return json(200, { upserted: crm.viewings[viewings[1]!]!.length, removed: 0 });
+    }
     return json(404, { detail: 'Not found' });
   });
 });
@@ -183,5 +200,97 @@ describe('portfolio sync', () => {
     const r = await admin.post('/admin/crm/sync');
     expect(r.body).toMatchObject({ created: 1 });
     expect(r.body.errors).toEqual([{ ref: 'dq:7', error: 'Reference DQ-7 is already used by another property' }]);
+  });
+});
+
+describe('viewings pushed to the CRM', () => {
+  /** A booking by Jane with one stop for lead 42 at listing 7, and one errand. */
+  async function bookForLead() {
+    const { body: lead } = await jane.get('/crm/leads/42');
+    const p = lead.properties[0];
+    const start = new Date(Math.ceil((Date.now() + 2 * 3600_000) / 900_000) * 900_000);
+    const r = await jane.post('/bookings', {
+      carId: s.car1.id,
+      startAt: start.toISOString(),
+      expectedReturnAt: new Date(start.getTime() + 2 * 3600_000).toISOString(),
+      stops: [
+        { address: p.address, lat: -1.26, lng: 36.81, propertyId: p.id, reasonId: s.viewing.id, crmLeadRef: lead.ref, crmLeadName: lead.firstName },
+        { address: 'Errand', lat: -1.27, lng: 36.8, reasonId: s.errand.id },
+      ],
+    });
+    expect(r.status).toBe(201);
+    return r.body.id as string;
+  }
+  const puts = () => seen.filter((x) => x.url.includes('/viewings')).length;
+
+  it('sends each change once, as the booking moves along', async () => {
+    const id = await bookForLead();
+    expect(await pushCrmViewings()).toEqual({ pushed: 1, failed: [] });
+    expect(crm.viewings[id]).toEqual([
+      expect.objectContaining({ lead_id: 42, property_ref: 'dq:7', agent_email: 'jane@test.ke', counts_as_viewing: true, status: 'REQUESTED', car_km: null }),
+    ]);
+    expect(seen.find((x) => x.url.includes('/viewings'))?.auth).toBe(`Bearer ${env.CRM_API_TOKEN}`);
+
+    // Nothing changed: nothing sent.
+    expect((await pushCrmViewings()).pushed).toBe(0);
+    expect(puts()).toBe(1);
+
+    await admin.post(`/bookings/${id}/approve`);
+    await pushCrmViewings();
+    expect(crm.viewings[id]![0].status).toBe('BOOKED');
+
+    await jane.post(`/bookings/${id}/cancel`, { reason: 'Client postponed' });
+    await pushCrmViewings();
+    expect(crm.viewings[id]![0].status).toBe('CANCELLED');
+    expect(puts()).toBe(3);
+  });
+
+  it('tells the CRM when a stop no longer belongs to a lead', async () => {
+    const id = await bookForLead();
+    await pushCrmViewings();
+    await prisma.bookingStop.updateMany({ where: { bookingId: id }, data: { crmLeadRef: null, crmLeadName: null } });
+    expect((await pushCrmViewings()).pushed).toBe(1);
+    expect(crm.viewings[id]).toEqual([]);
+  });
+
+  it('leaves bookings with no CRM lead alone', async () => {
+    const id = await bookForLead();
+    await prisma.bookingStop.updateMany({ where: { bookingId: id }, data: { crmLeadRef: null, crmLeadName: null } });
+    expect((await pushCrmViewings()).pushed).toBe(0);
+    expect(puts()).toBe(0);
+  });
+
+  it('stops the run while the CRM is down, then catches up', async () => {
+    const id = await bookForLead();
+    crm.down = true;
+    await expect(pushCrmViewings()).rejects.toBeInstanceOf(CrmUnavailable);
+    expect(await prisma.crmViewingPush.count()).toBe(0);
+    crm.down = false;
+    expect((await pushCrmViewings()).pushed).toBe(1);
+    expect(crm.viewings[id]).toHaveLength(1);
+  });
+
+  it('skips a booking the CRM refuses, without holding up the rest', async () => {
+    const refused = await bookForLead();
+    const other = await bookForLead();
+    crm.refuse.add(refused);
+    const r = await pushCrmViewings();
+    expect(r.pushed).toBe(1);
+    expect(r.failed).toEqual([{ bookingId: refused, error: expect.stringContaining('refused') }]);
+    expect(crm.viewings[other]).toHaveLength(1);
+    // Refused stays unrecorded, so it is tried again next time.
+    crm.refuse.clear();
+    expect((await pushCrmViewings()).pushed).toBe(1);
+  });
+
+  it('does nothing when the link is not configured', async () => {
+    await bookForLead();
+    const saved = env.CRM_API_URL;
+    env.CRM_API_URL = undefined;
+    try {
+      expect(await pushCrmViewings()).toEqual({ pushed: 0, failed: [] });
+    } finally {
+      env.CRM_API_URL = saved;
+    }
   });
 });

@@ -1,8 +1,10 @@
-import { CRM_PROPERTY_PREFIX, CrmLeadSchema, CrmListingSchema, crmListingToProperty, type CrmLead, type CrmListing } from '@carbooking/core';
+import { createHash } from 'node:crypto';
+import { CRM_PROPERTY_PREFIX, CrmLeadSchema, CrmListingSchema, crmListingToProperty, crmViewings, DAY, type CrmLead, type CrmListing } from '@carbooking/core';
 import { isUniqueViolation, prisma, type Property } from '@carbooking/db';
 import { z } from 'zod';
 import { audit } from './audit';
 import { env } from './env';
+import { getSettings } from './settings';
 
 /**
  * The Dunhill CRM. Fleet does all the syncing: the CRM only answers. Its routes are
@@ -12,17 +14,26 @@ export const crmEnabled = () => Boolean(env.CRM_API_URL && env.CRM_API_TOKEN);
 
 export class CrmUnavailable extends Error {}
 
-async function crmGet<T>(path: string, schema: z.ZodType<T>): Promise<T | null> {
+async function crmFetch(path: string, init: { method?: 'GET' | 'PUT'; body?: unknown } = {}): Promise<Response> {
   if (!crmEnabled()) throw new CrmUnavailable('The CRM link is not set up');
-  let res: Response;
   try {
-    res = await fetch(new URL(path, env.CRM_API_URL), {
-      headers: { authorization: `Bearer ${env.CRM_API_TOKEN}`, accept: 'application/json' },
+    return await fetch(new URL(path, env.CRM_API_URL), {
+      method: init.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${env.CRM_API_TOKEN}`,
+        accept: 'application/json',
+        ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
       signal: AbortSignal.timeout(15_000),
     });
   } catch (err) {
     throw new CrmUnavailable(`The CRM did not answer: ${(err as Error).message}`);
   }
+}
+
+async function crmGet<T>(path: string, schema: z.ZodType<T>): Promise<T | null> {
+  const res = await crmFetch(path);
   if (res.status === 404 && path.includes('/leads/')) return null;
   if (!res.ok) throw new CrmUnavailable(`The CRM answered ${res.status}`);
   return schema.parse(await res.json());
@@ -110,5 +121,85 @@ export async function syncCrmProperties(actorId: string | null = null): Promise<
   if (gone.length) summary.withdrawn = (await prisma.property.updateMany({ where: { id: { in: gone } }, data: { status: 'WITHDRAWN' } })).count;
 
   await audit({ actorId, action: 'CRM_PROPERTIES_SYNCED', entity: 'Property', after: { ...summary, errors: summary.errors.slice(0, 50) } });
+  return summary;
+}
+
+/** How far back the viewings push looks: well past the end of any trip. */
+const VIEWINGS_LOOKBACK_DAYS = 30;
+
+export interface CrmViewingsPushSummary {
+  pushed: number;
+  failed: { bookingId: string; error: string }[];
+}
+
+/**
+ * Tell the CRM about each booking whose viewings changed since we last did. A booking's
+ * whole set goes at once, keyed by our stop ids, so a repeat is harmless and a stop that
+ * loses its lead drops off the CRM. Runs every minute: anything that fails goes again on
+ * the next run. When the CRM is down or refuses us outright, the run stops at once rather
+ * than failing every booking in turn.
+ */
+export async function pushCrmViewings(now = new Date()): Promise<CrmViewingsPushSummary> {
+  const summary: CrmViewingsPushSummary = { pushed: 0, failed: [] };
+  if (!crmEnabled()) return summary;
+  const { stopCostSplit } = await getSettings();
+  const bookings = await prisma.booking.findMany({
+    where: {
+      startAt: { gte: new Date(now.getTime() - VIEWINGS_LOOKBACK_DAYS * DAY) },
+      // Once pushed, keep checking: its last CRM stop may since have lost its lead.
+      OR: [{ crmPush: { isNot: null } }, { stops: { some: { crmLeadRef: { not: null } } } }],
+    },
+    orderBy: { startAt: 'asc' },
+    select: {
+      id: true,
+      status: true,
+      startAt: true,
+      owner: { select: { email: true } },
+      crmPush: { select: { hash: true } },
+      trip: { select: { startedAt: true, endedAt: true, odometerStart: true, odometerEnd: true } },
+      stops: {
+        select: {
+          id: true,
+          seq: true,
+          status: true,
+          crmLeadRef: true,
+          address: true,
+          arrivedAt: true,
+          departedAt: true,
+          reason: { select: { label: true, countsAsViewing: true } },
+          property: { select: { crmRef: true } },
+        },
+      },
+    },
+  });
+
+  for (const b of bookings) {
+    const viewings = crmViewings(
+      {
+        status: b.status,
+        startAt: b.startAt,
+        ownerEmail: b.owner.email,
+        trip: b.trip,
+        stops: b.stops.map(({ property, ...s }) => ({ ...s, propertyCrmRef: property?.crmRef ?? null })),
+      },
+      stopCostSplit,
+    );
+    const hash = createHash('sha256').update(JSON.stringify(viewings)).digest('hex');
+    if (hash === b.crmPush?.hash) continue;
+
+    const res = await crmFetch(`/api/integrations/fleet/bookings/${b.id}/viewings`, { method: 'PUT', body: { viewings } });
+    if (!res.ok) {
+      // 422 is about this booking's data; anything else (401, 404, 5xx) is the link itself.
+      if (res.status !== 422) throw new CrmUnavailable(`The CRM answered ${res.status}`);
+      summary.failed.push({ bookingId: b.id, error: (await res.text()).slice(0, 500) });
+      continue;
+    }
+    await prisma.crmViewingPush.upsert({
+      where: { bookingId: b.id },
+      create: { bookingId: b.id, hash, pushedAt: now },
+      update: { hash, pushedAt: now },
+    });
+    summary.pushed++;
+  }
   return summary;
 }
