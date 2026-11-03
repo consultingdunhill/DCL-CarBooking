@@ -429,6 +429,7 @@ model Booking {
   passengers   BookingPassenger[]
   joinRequests JoinRequest[]
   trip         Trip?
+  crmPush      CrmViewingPush?
 
   @@index([status, startAt])
   @@index([carId, startAt])
@@ -470,6 +471,16 @@ model BookingStop {
   @@index([bookingId, seq])
   @@index([propertyId])
   @@index([crmLeadRef])
+}
+
+/// What the CRM was last told about a booking's viewings (its stops for CRM leads), so
+/// each change is pushed once. Only rows the CRM accepted are recorded.
+model CrmViewingPush {
+  bookingId String   @id @db.Uuid
+  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  /// sha256 of the viewings as sent.
+  hash      String
+  pushedAt  DateTime @db.Timestamptz(3)
 }
 
 model BookingPassenger {

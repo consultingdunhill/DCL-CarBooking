@@ -1,4 +1,4 @@
-import { carMonthlyStats, computeTripCost, costPerKmLookup, type FuelEntryLite, type HourlyRateLite, type KmRecord, type TripCost } from './costs';
+import { carMonthlyStats, computeTripCost, costPerKmLookup, STOPS_THAT_HAPPENED, type FuelEntryLite, type HourlyRateLite, type KmRecord, type TripCost } from './costs';
 import { DEPARTMENT_LABELS, type BookingStatus, type DealType, type Department, type PropertyService, type PropertyStatus, type StopStatus, type TrackingEventType } from './enums';
 import type { Settings } from './settings';
 import { addMonths, DAY, HOUR, monthKey, monthRange, workingMinutesBetween } from './time';
@@ -187,7 +187,6 @@ const SERVICE_LABELS: Record<PropertyService, string> = { SALES: 'Sales', LETTIN
 
 // ── Shared derivations ────────────────────────────────────────────────────────
 
-const STOPS_THAT_HAPPENED: StopStatus[] = ['PLANNED', 'ARRIVED', 'DEPARTED'];
 const RAN: BookingStatus[] = ['IN_PROGRESS', 'COMPLETED', 'AWAITING_ODOMETER'];
 
 const inRange = (d: Date, f: ReportFilters) => d >= f.from && d < f.to;

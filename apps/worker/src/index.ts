@@ -9,12 +9,14 @@
  *  - notification dispatch (push, email, SMS/WhatsApp)
  *  - the linked WhatsApp device, when WHATSAPP_PROVIDER=baileys
  *  - the CRM's portfolio, nightly, when CRM_API_URL is set
+ *  - viewings (stops booked for CRM leads) pushed back to the CRM as they change
  */
 import { prisma } from '@carbooking/db';
 import {
   crmEnabled,
   dispatchNotifications,
   getBoss,
+  pushCrmViewings,
   QUEUES,
   runAwaitingOdometerReminders,
   runDispatchSweep,
@@ -60,6 +62,10 @@ const schedules: [string, string, (now: Date) => Promise<unknown>][] = [
   // 04:00 in Nairobi: an hour after the CRM's own nightly scrape of the website.
   [QUEUES.crmSync, '0 1 * * *', async () => {
     if (crmEnabled()) console.log('[crm.sync]', await syncCrmProperties());
+  }],
+  [QUEUES.crmViewings, '* * * * *', async (now) => {
+    const r = await pushCrmViewings(now);
+    if (r.pushed || r.failed.length) console.log('[crm.push-viewings]', r);
   }],
 ];
 
