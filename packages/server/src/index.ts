@@ -10,6 +10,7 @@ export * from './bookings';
 export * from './tracking';
 export * from './trackers';
 export * from './tracker-sync';
+export * from './tracker-import';
 export * from './monitor';
 export * from './whatsapp';
 export * from './crm';

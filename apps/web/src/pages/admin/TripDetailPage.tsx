@@ -417,7 +417,7 @@ function RouteCard({
             <span className="w-5 border-t-[3px] border-dashed" style={{ borderColor: PLANNED_COLOR }} /> Planned route
           </li>
           <li className="flex items-center gap-1.5">
-            <span className="w-5 border-t-[3px]" style={{ borderColor: ACTUAL_COLOR }} /> Actual GPS track
+            <span className="w-5 border-t-[3px]" style={{ borderColor: ACTUAL_COLOR }} /> Actual GPS track{t.pathSource === 'TRACKER' ? " (car's tracker)" : t.pathSource === 'PHONE' ? ' (phone)' : ''}
           </li>
           {polylines.some((p) => p.id.startsWith('gap-')) && (
             <li className="flex items-center gap-1.5">
@@ -819,7 +819,7 @@ function SummaryCards({ t, now }: { t: TripDetail; now: number }) {
               ['Start reading', `${t.odometerStart.toLocaleString()} km`],
               ['End reading', t.odometerEnd != null ? `${t.odometerEnd.toLocaleString()} km` : '–'],
               ['Trip km (odometer)', fmt.km(t.tripKm)],
-              ['GPS km', fmt.km(t.gpsDistanceKm)],
+              [t.pathSource === 'TRACKER' ? "GPS km (car's tracker)" : 'GPS km', fmt.km(t.gpsDistanceKm)],
               [
                 'Variance',
                 t.variancePct == null ? (

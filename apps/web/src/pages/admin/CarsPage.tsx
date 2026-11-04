@@ -1,7 +1,8 @@
 import { CAR_STATUSES, CarSchema, DriverSchema, FUEL_TYPES, type CarStatus, type FuelType } from '@carbooking/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Car as CarIcon, Pencil, Phone, Plus, UserRound } from 'lucide-react';
-import { useState } from 'react';
+import { Car as CarIcon, FileSpreadsheet, Pencil, Phone, Plus, Upload, UserRound } from 'lucide-react';
+import { useId, useRef, useState } from 'react';
+import { Link } from 'react-router';
 import { toast } from 'sonner';
 import { QueryBlock, TableSkeleton, UnitInput } from '@/components/admin/common';
 import { check, numOrNull, numOrUndef, str, textOrNull, type FieldErrors } from '@/components/admin/form-utils';
@@ -9,11 +10,12 @@ import { CAR_STATUS, FUEL_TYPE_LABELS } from '@/components/admin/labels';
 import { Page } from '@/components/Shell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader } from '@/components/ui/card';
+import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/form';
-import { EmptyState, PageHeader, Table, Td, Th } from '@/components/ui/misc';
-import { errorMessage, get, post, put } from '@/lib/api';
+import { EmptyState, PageHeader, Stat, Table, Td, Th } from '@/components/ui/misc';
+import { errorMessage, get, post, postFile, put } from '@/lib/api';
+import { useFormat } from '@/lib/format';
 import type { Car, Driver } from '@/lib/types';
 
 const CARS_KEY = ['admin', 'cars'] as const;
@@ -143,9 +145,126 @@ export function CarsPage() {
         </QueryBlock>
       </Card>
 
+      {cars.data && cars.data.length > 0 && <TrackerHistoryCard cars={cars.data.filter((c) => c.status !== 'RETIRED')} />}
+
       {carDialog && <CarDialog car={carDialog.car} onClose={() => setCarDialog(null)} />}
       {driverDialog && <DriverDialog driver={driverDialog.driver} onClose={() => setDriverDialog(null)} />}
     </Page>
+  );
+}
+
+interface TrackerImportSummary {
+  fileName: string;
+  fixes: number;
+  skipped: number;
+  duplicates: number;
+  from: string | null;
+  to: string | null;
+  trips: { tripId: string; startedAt: string; endedAt: string | null; owner: string; added: number }[];
+  outsideTrips: number;
+}
+
+/**
+ * Oversee doesn't let Fleet read the trackers directly, so an admin uploads a
+ * car's exported history and Fleet attaches it to that car's trips by time.
+ */
+function TrackerHistoryCard({ cars }: { cars: Car[] }) {
+  const qc = useQueryClient();
+  const fmt = useFormat();
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [carId, setCarId] = useState(() => (cars.find((c) => c.trackerDeviceId) ?? cars[0])?.id ?? '');
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<{ registration: string; summary: TrackerImportSummary } | null>(null);
+  const car = cars.find((c) => c.id === carId);
+
+  const upload = useMutation({
+    mutationFn: ({ id, f }: { id: string; f: File }) => postFile<TrackerImportSummary>(`/admin/cars/${id}/tracker-history`, f),
+    onSuccess: (summary) => {
+      setResult({ registration: car?.registration ?? '', summary });
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = '';
+      const added = summary.trips.reduce((n, t) => n + t.added, 0);
+      toast.success(summary.trips.length ? `Added ${added.toLocaleString()} positions to ${summary.trips.length} trip${summary.trips.length === 1 ? '' : 's'}` : 'No trips in that time range');
+      void qc.invalidateQueries({ queryKey: ['trip'] });
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  return (
+    <Card className="mt-6">
+      <CardHeader
+        title="Tracker history"
+        description="Oversee doesn't let Fleet read the trackers directly. On Oversee, open Reports and Charts → Location History Records Report, pick the car and day, export it, and upload the file here. Fleet adds the positions to that car's trips by time; uploading the same file again adds nothing."
+      />
+      <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={carId} onChange={(e) => setCarId(e.target.value)} aria-label="Car" className="w-auto">
+            {cars.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.registration}
+              </option>
+            ))}
+          </Select>
+          <input
+            ref={inputRef}
+            id={inputId}
+            type="file"
+            accept=".xls,.html,.htm"
+            className="sr-only"
+            onChange={(e) => {
+              setFile(e.target.files?.[0] ?? null);
+              setResult(null);
+            }}
+          />
+          <Button variant="secondary" onClick={() => inputRef.current?.click()} aria-controls={inputId}>
+            <FileSpreadsheet /> Choose export file
+          </Button>
+          <span className="min-w-0 flex-1 truncate text-sm text-muted-fg">{file ? file.name : 'No file chosen'}</span>
+          <Button onClick={() => file && carId && upload.mutate({ id: carId, f: file })} disabled={!file || !carId} loading={upload.isPending}>
+            {!upload.isPending && <Upload />} Upload
+          </Button>
+        </div>
+        {result && (
+          <div className="space-y-4 rounded-xl border border-border bg-surface-2 p-4">
+            <p className="text-sm font-medium">
+              {result.summary.fileName} · {result.registration}
+              {result.summary.from && result.summary.to && (
+                <span className="font-normal text-muted-fg">
+                  {' '}
+                  · {fmt.dateTime(result.summary.from)} – {fmt.dateTime(result.summary.to)}
+                </span>
+              )}
+            </p>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Stat label="Positions" value={result.summary.fixes.toLocaleString()} />
+              <Stat label="Trips matched" value={result.summary.trips.length} />
+              <Stat label="Added" value={result.summary.trips.reduce((n, t) => n + t.added, 0).toLocaleString()} />
+              <Stat label="Outside trips" value={result.summary.outsideTrips.toLocaleString()} hint="Not kept" />
+            </div>
+            {result.summary.trips.length > 0 ? (
+              <ul className="space-y-1 text-sm">
+                {result.summary.trips.map((t) => (
+                  <li key={t.tripId} className="flex flex-wrap gap-x-2">
+                    <Link to={`/admin/trips/${t.tripId}`} className="font-medium text-primary hover:underline">
+                      {fmt.dateTime(t.startedAt)}
+                      {t.endedAt ? `–${fmt.time(t.endedAt)}` : ' (running)'}
+                    </Link>
+                    <span className="text-muted-fg">
+                      {t.owner} · {t.added ? `${t.added.toLocaleString()} positions added` : 'already up to date'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-fg">
+                None of {result.registration}'s trips fall in this file's time range. Check you picked the right car, and that the trips were started in Fleet.
+              </p>
+            )}
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 

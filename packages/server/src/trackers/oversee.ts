@@ -20,9 +20,11 @@ import { TrackerError, type TrackerPosition, type TrackerProvider } from './type
  * on the worker's cadence and store each fix, so the breadcrumb accumulates over
  * the trip. Car.trackerDeviceId is the tracker's SystemNo.
  *
- * NOTE (verify on first live connect): Position.DateTime has no timezone in the
- * payload; we read it as UTC. If fixes land in the wrong window, set the offset
- * via OVERSEE_TZ_OFFSET_MIN. Velocity is assumed km/h (converted to m/s).
+ * First live connect (2026-11): the API answers SignIn with an empty body unless
+ * the request comes from Oversee's own website, so this provider can't be used
+ * from a server. Paths come from the uploaded history export instead (see
+ * parseOverseeHistory). Position.DateTime has no timezone: it's the account's
+ * zone, offset by OVERSEE_TZ_OFFSET_MIN. Velocity is km/h (converted to m/s).
  */
 
 interface OverseePosition {

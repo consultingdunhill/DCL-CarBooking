@@ -293,6 +293,8 @@ export interface TripDetail extends TripSummary {
   device: Record<string, unknown> | null;
   booking: Booking;
   events: TrackingEvent[];
+  /** Where the path comes from: the car's tracker when it reported, else the phone. Admins only. */
+  pathSource?: 'TRACKER' | 'PHONE' | null;
   points: LocationPoint[];
 }
 

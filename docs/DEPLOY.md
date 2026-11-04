@@ -137,6 +137,10 @@ VITE_ENTRA_API_SCOPE=api://<api client id>/access_as_user
 CRM_API_URL=http://crm:8000
 CRM_API_TOKEN=<the CRM's FLEET_INTEGRATION_TOKEN>
 
+# ── Trips from the phone's browser, until the Fleet app is distributed ──
+# Foreground GPS only: it records while the screen is on and Fleet is open.
+VITE_ALLOW_WEB_TRIPS=true
+
 # ── Off until each is ready ──
 STORAGE_DRIVER=local
 TRACKER_PROVIDER=none
@@ -146,9 +150,10 @@ WHATSAPP_PROVIDER=none
 
 Add these when they exist: `GOOGLE_MAPS_SERVER_KEY` and `VITE_GOOGLE_MAPS_API_KEY` (real road
 routes and maps); `VAPID_*` and `VITE_VAPID_PUBLIC_KEY` (web push); `FCM_SERVICE_ACCOUNT_BASE64`
-(phone push); `GRAPH_*` (email); an SMS provider; and for the GPS trackers, `TRACKER_PROVIDER=oversee`
-with `OVERSEE_*`. Until then the app uses free maps, straight-line distances and logged
-notifications. Leave `DATABASE_URL`, `NODE_ENV`, `STORAGE_LOCAL_DIR` and `WHATSAPP_AUTH_DIR` out:
+(phone push); `GRAPH_*` (email); and an SMS provider. Until then the app uses free maps,
+straight-line distances and logged notifications. Leave `TRACKER_PROVIDER=none`: Oversee's API
+only answers its own website, so the car trackers' paths come from Oversee's history export,
+uploaded per car under **Cars & driver → Tracker history**. Leave `DATABASE_URL`, `NODE_ENV`, `STORAGE_LOCAL_DIR` and `WHATSAPP_AUTH_DIR` out:
 the compose file sets them.
 
 ## 6. Build and start

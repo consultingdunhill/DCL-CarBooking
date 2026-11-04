@@ -20,7 +20,7 @@ import {
   validateStartOdometer,
 } from '@carbooking/core';
 import { isExclusionViolation, isUniqueViolation, prisma, type Prisma } from '@carbooking/db';
-import { audit, auditView, env, getSettings, ingestDeviceEvents, ingestLocations, notify, publishLive, touchTrip } from '@carbooking/server';
+import { audit, auditView, env, getSettings, ingestDeviceEvents, ingestLocations, notify, publishLive, touchTrip, tripPathSource } from '@carbooking/server';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { isAdmin, me } from '../lib/auth';
 import { ipOf, parse, type IdParams } from '../lib/http';
@@ -295,7 +295,11 @@ export async function tripRoutes(app: FastifyInstance) {
     const trip = await prisma.trip.findUniqueOrThrow({ where: { id: tripId }, include: { booking: { include: { car: true } } } });
     const { tripKm } = validateEndOdometer(opts.odometer, trip.odometerStart);
     const s = await getSettings();
-    const points = await prisma.locationPoint.findMany({ where: { tripId }, select: { lat: true, lng: true, recordedAt: true, accuracy: true } });
+    const pathSource = await tripPathSource(tripId);
+    const points = await prisma.locationPoint.findMany({
+      where: { tripId, ...(pathSource === 'TRACKER' ? { source: 'TRACKER' } : {}) },
+      select: { lat: true, lng: true, recordedAt: true, accuracy: true },
+    });
     const gpsKm = pathDistanceKm(points, { maxAccuracyM: s.maxFixAccuracyM });
     // If it went to AWAITING_ODOMETER, the trip really ended when the car got back.
     const endedAt = trip.officeArrivedAt && trip.booking.status === 'AWAITING_ODOMETER' ? trip.officeArrivedAt : opts.endedAt;
@@ -438,9 +442,14 @@ export async function tripRoutes(app: FastifyInstance) {
         points: [],
       };
     }
-    const points = await prisma.locationPoint.findMany({ where: { tripId: trip.id }, orderBy: { recordedAt: 'asc' }, select: pointSelect });
+    const pathSource = await tripPathSource(trip.id);
+    const points = await prisma.locationPoint.findMany({
+      where: { tripId: trip.id, ...(pathSource === 'TRACKER' ? { source: 'TRACKER' } : {}) },
+      orderBy: { recordedAt: 'asc' },
+      select: pointSelect,
+    });
     await auditView({ actorId: user.id, action: 'VIEW_LOCATION', entity: 'Trip', entityId: trip.id, ip: ipOf(req) });
-    return { ...base, points };
+    return { ...base, pathSource, points };
   });
 
   app.get<{ Querystring: { from?: string; to?: string; carId?: string; status?: string } }>('/admin/trips', { config: { auth: 'admin' } }, async (req) => {

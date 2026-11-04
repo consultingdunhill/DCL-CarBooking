@@ -7,6 +7,7 @@ import {
   JobRoleSchema,
   notFound,
   OfficeSchema,
+  parseOverseeHistory,
   ReorderSchema,
   SettingsUpdateSchema,
   UserUpdateSchema,
@@ -14,7 +15,7 @@ import {
   zonedTimeToUtc,
 } from '@carbooking/core';
 import { isUniqueViolation, num, prisma, type Prisma } from '@carbooking/db';
-import { audit, env, getSettings, invalidateSettings } from '@carbooking/server';
+import { audit, env, getSettings, importTrackerHistory, invalidateSettings } from '@carbooking/server';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { me } from '../lib/auth';
 import { ipOf, parse, type IdParams } from '../lib/http';
@@ -77,6 +78,24 @@ export async function adminRoutes(app: FastifyInstance) {
     const car = await prisma.car.update({ where: { id: before.id }, data: body }).catch((e) => duplicate(e, 'A car with that registration'));
     await logChange(req, 'CAR_UPDATED', 'Car', car.id, before, car);
     return car;
+  });
+
+  /**
+   * The car's GPS history exported from Oversee (Location History Records
+   * Report), attached to the car's trips by time. Oversee doesn't let other
+   * systems read it directly, so an admin uploads the export.
+   */
+  app.post<{ Params: IdParams }>('/admin/cars/:id/tracker-history', admin, async (req) => {
+    const car = await prisma.car.findUnique({ where: { id: req.params.id } });
+    if (!car) throw notFound('Car');
+    const file = await req.file({ limits: { fileSize: 25 * 1024 * 1024 } });
+    if (!file) throw new DomainError('NO_FILE', 'Choose the exported file to upload');
+    const history = parseOverseeHistory((await file.toBuffer()).toString('utf8'), env.OVERSEE_TZ_OFFSET_MIN);
+    const result = await importTrackerHistory(car, history.fixes);
+    const summary = { fileName: file.filename, fixes: history.fixes.length, skipped: history.skipped, duplicates: history.duplicates, ...result };
+    const added = result.trips.reduce((n, t) => n + t.added, 0);
+    await logChange(req, 'TRACKER_HISTORY_IMPORTED', 'Car', car.id, null, { fileName: file.filename, from: result.from, to: result.to, trips: result.trips.length, added });
+    return summary;
   });
 
   // ── Driver(s) ───────────────────────────────────────────────────────────────

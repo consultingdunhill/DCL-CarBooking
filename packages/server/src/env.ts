@@ -39,7 +39,11 @@ const EnvSchema = z.object({
   GOOGLE_MAPS_SERVER_KEY: opt,
 
   // ── Hardware GPS trackers ─────────────────────────────────────────────────────
-  /** none = off (phone GPS only); mock = synthetic fixes for dev; oversee = Oversee Tracking. */
+  /**
+   * Live polling of the cars' trackers. none = off; mock = synthetic fixes for dev;
+   * oversee = Oversee Tracking, which in practice only answers its own website, so
+   * leave it off and upload Oversee's history export per car instead.
+   */
   TRACKER_PROVIDER: z.enum(['none', 'mock', 'oversee']).default('none'),
   /** Oversee's command endpoint (recovered from its web client). */
   OVERSEE_API_URL: z.string().default('https://api.overseetracking.com:9090/WebProcessorApi.ashx'),
@@ -47,8 +51,8 @@ const EnvSchema = z.object({
   OVERSEE_PASSWORD: opt,
   /** LanguageType GUID the portal sends on every call; default is the one its web client uses. */
   OVERSEE_LANGUAGE_TYPE: z.string().default('2B72ABC6-19D7-4653-AAEE-0BE542026D46'),
-  /** Minutes to subtract from Oversee's zone-less DateTime to reach UTC. Verify on first live connect. */
-  OVERSEE_TZ_OFFSET_MIN: z.coerce.number().int().default(0),
+  /** Oversee shows times in the account's timezone with no zone marked: its offset from UTC in minutes (Kenya: 180). */
+  OVERSEE_TZ_OFFSET_MIN: z.coerce.number().int().default(180),
 
   STORAGE_DRIVER: z.enum(['local', 'azure']).default('local'),
   STORAGE_LOCAL_DIR: opt,
