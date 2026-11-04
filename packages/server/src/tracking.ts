@@ -231,6 +231,17 @@ export async function ingestLocations(
   return { accepted: rows.length };
 }
 
+/**
+ * Where a trip's path comes from: the car's tracker when it reported any fixes
+ * for the trip, otherwise the owner's phone. The two are never mixed.
+ */
+export async function tripPathSource(tripId: string): Promise<'TRACKER' | 'PHONE' | null> {
+  const tracker = await prisma.locationPoint.findFirst({ where: { tripId, source: 'TRACKER' }, select: { id: true } });
+  if (tracker) return 'TRACKER';
+  const phone = await prisma.locationPoint.findFirst({ where: { tripId }, select: { id: true } });
+  return phone ? 'PHONE' : null;
+}
+
 async function checkLowBattery(trip: TripWithBooking, s: Settings) {
   if (trip.lastBattery == null || trip.lastBattery > s.lowBatteryPct) return;
   const already = await prisma.trackingEvent.count({ where: { tripId: trip.id, type: 'LOW_BATTERY' } });
