@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily download of Fleet backups
+
+[Timer]
+# The server backs up at 03:30 Berlin time (05:30 in Nairobi). If this PC is off
+# at 12:30, Persistent runs it at the next login.
+OnCalendar=*-*-* 12:30
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
