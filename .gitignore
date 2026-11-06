@@ -11,3 +11,5 @@ test-results
 /apps/api/storage
 *.tsbuildinfo
 .whatsapp-auth
+# Oversee tracker exports hold real GPS history; upload them in Fleet, never commit them
+Location History Records Report*.xls

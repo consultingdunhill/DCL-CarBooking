@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Copies the server's nightly Fleet backups (fleet-backup.sh) to this machine,
+# so a dead server disk doesn't take the backups with it.
+#
+# Installed on the developer PC as ~/.local/bin/fleet-pull-backups and run daily
+# by the systemd user timer fleet-pull-backups.timer.
+#
+# Never mirrors deletions (no rsync --delete): if the server is wiped or
+# compromised, the local copies survive. Local copies are pruned on their own
+# rule: 30 days of database dumps, the 3 newest photo sets.
+set -euo pipefail
+
+REMOTE="deploy@217.216.77.107:backups/fleet/"
+LOCAL_DIR="$HOME/backups/fleet"
+KEEP_DUMP_DAYS=30
+KEEP_PHOTO_SETS=3
+# A run caught up at login or wake often starts before the Wi-Fi is back, so a
+# failed download is retried here rather than by systemd, which would raise a
+# desktop alert for every attempt instead of only the last.
+ATTEMPTS=6
+RETRY_WAIT_SEC=300
+
+alert() {
+  echo "$*" >&2
+  notify-send -u critical "Fleet backup" "$*" 2>/dev/null || true
+}
+
+pull() {
+  rsync -a --chmod=F600 --include='fleet_*.dump' --include='fleet-photos_*.tgz' --exclude='*' \
+    -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i $HOME/.ssh/id_ed25519 -o ConnectTimeout=20" \
+    "$REMOTE" "$LOCAL_DIR/"
+}
+
+mkdir -p "$LOCAL_DIR"
+chmod 700 "$LOCAL_DIR"
+
+attempt=1
+until pull; do
+  if [ "$attempt" -ge "$ATTEMPTS" ]; then
+    alert "Couldn't download backups from the server after $ATTEMPTS tries. Check: journalctl --user -u fleet-pull-backups"
+    exit 1
+  fi
+  echo "Download attempt $attempt of $ATTEMPTS failed; trying again in $((RETRY_WAIT_SEC / 60)) min" >&2
+  attempt=$((attempt + 1))
+  sleep "$RETRY_WAIT_SEC"
+done
+
+find "$LOCAL_DIR" -maxdepth 1 -name 'fleet_*.dump' -mtime +"$((KEEP_DUMP_DAYS - 1))" -print -delete
+ls -1t "$LOCAL_DIR"/fleet-photos_*.tgz 2>/dev/null | tail -n +"$((KEEP_PHOTO_SETS + 1))" | xargs -r rm -v
+
+newest="$(find "$LOCAL_DIR" -maxdepth 1 -name 'fleet_*.dump' -mtime -2 | head -1)"
+if [ -z "$newest" ]; then
+  alert "No Fleet backup newer than 2 days. The server's nightly backup may be failing"
+  exit 1
+fi
+echo "$(find "$LOCAL_DIR" -maxdepth 1 -name 'fleet_*.dump' | wc -l) dump(s) in $LOCAL_DIR"

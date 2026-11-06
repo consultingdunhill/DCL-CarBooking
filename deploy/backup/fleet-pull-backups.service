@@ -1,0 +1,8 @@
+[Unit]
+Description=Download Fleet backups from the server
+# No After=network-online.target: a user service can't wait on that system
+# target, so the script retries the download itself while the network comes up.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/fleet-pull-backups

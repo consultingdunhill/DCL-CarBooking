@@ -234,18 +234,35 @@ effect through a rebuild, which `--build` does every time.
 ## Backups
 
 The database and the photo volume are the two things that cannot be rebuilt. The CRM lost
-its database with the Contabo box on 27 Oct, so keep copies **off this server**:
+its database with the Contabo box on 27 Oct, so copies are kept **off this server** too.
+The scripts are in [deploy/backup/](../deploy/backup/).
+
+| Where | What runs | Keeps |
+|---|---|---|
+| Server | `~/fleet-jobs/fleet-backup.sh` from the `deploy` user's crontab, at 03:30 server time (05:30 Nairobi). It writes to `~/backups/fleet/` and logs to `~/backups/fleet-backup.log`. | 14 days of database dumps and the 3 newest photo sets |
+| Laptop | `~/.local/bin/fleet-pull-backups` from the systemd user timer `fleet-pull-backups.timer`, at 12:30, or at the next login if the laptop was off. It copies into `~/backups/fleet/` and never mirrors deletions. If the server can't be reached, for example because the Wi-Fi isn't back yet after waking up, it tries again every 5 minutes, up to 6 tries, then raises a desktop alert. It also raises an alert if no dump is newer than 2 days. | 30 days of dumps and the 3 newest photo sets |
+
+Each dump is checked with `pg_restore --list` before it replaces anything, and old copies are
+only pruned after a good new one exists. The scripts live outside `/opt/clients/fleet`,
+because the deploy's `rsync --delete` would remove them from there.
+
+Install or update them:
 
 ```bash
-cd /opt/clients/fleet
-docker compose -f docker-compose.prod.yml exec -T db pg_dump -U fleet -Fc fleet > ~/backups/fleet-$(date +%F).dump
-docker run --rm -v fleet_storage:/data:ro -v ~/backups:/out alpine \
-  tar czf /out/fleet-photos-$(date +%F).tgz -C /data .
-# then copy ~/backups somewhere else, e.g. rsync it down to the laptop
+# server
+scp deploy/backup/fleet-backup.sh SERVER:fleet-jobs/fleet-backup.sh
+ssh SERVER 'chmod 755 ~/fleet-jobs/fleet-backup.sh; line="30 3 * * * \$HOME/fleet-jobs/fleet-backup.sh >> \$HOME/backups/fleet-backup.log 2>&1"; { crontab -l 2>/dev/null | grep -v fleet-backup.sh || true; echo "$line"; } | crontab -'
+
+# laptop
+install -m 755 deploy/backup/fleet-pull-backups ~/.local/bin/
+install -m 644 deploy/backup/fleet-pull-backups.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now fleet-pull-backups.timer
 ```
 
 Restore a dump into a fresh database with
-`docker compose -f docker-compose.prod.yml exec -T db pg_restore -U fleet -d fleet --clean < fleet-DATE.dump`.
+`docker compose -f docker-compose.prod.yml exec -T db pg_restore -U fleet -d fleet --clean --if-exists < fleet_DATE.dump`,
+and photos with
+`docker run --rm -i -v fleet_storage:/data alpine tar xzf - -C /data < fleet-photos_DATE.tgz`.
 
 ## If something is wrong
 
