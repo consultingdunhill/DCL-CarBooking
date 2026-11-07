@@ -141,6 +141,8 @@ enum PropertyStatus {
 enum DealType {
   SALE
   LETTING
+  /// A management contract signed with an owner (from the CRM).
+  MANAGEMENT
 }
 
 enum ImportRowStatus {
@@ -363,8 +365,9 @@ model Closure {
 model ClosureImportBatch {
   id             String             @id @default(uuid()) @db.Uuid
   fileName       String
-  uploadedById   String             @db.Uuid
-  uploadedBy     User               @relation(fields: [uploadedById], references: [id])
+  /// Null for the nightly CRM deals sync, which no one in particular ran.
+  uploadedById   String?            @db.Uuid
+  uploadedBy     User?              @relation(fields: [uploadedById], references: [id])
   uploadedAt     DateTime           @default(now()) @db.Timestamptz(3)
   rowCount       Int
   matchedCount   Int
@@ -376,16 +379,18 @@ model ClosureImportBatch {
 
 /// One CSV row. Unmatched rows form the admin's review queue.
 model ClosureImportRow {
-  id        String             @id @default(uuid()) @db.Uuid
-  batchId   String             @db.Uuid
-  batch     ClosureImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  rowNumber Int
-  raw       Json
-  status    ImportRowStatus
-  problems  String[]
-  closureId String?            @db.Uuid
-  closure   Closure?           @relation(fields: [closureId], references: [id])
-  createdAt DateTime           @default(now()) @db.Timestamptz(3)
+  id         String             @id @default(uuid()) @db.Uuid
+  batchId    String             @db.Uuid
+  batch      ClosureImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber  Int
+  raw        Json
+  status     ImportRowStatus
+  problems   String[]
+  closureId  String?            @db.Uuid
+  closure    Closure?           @relation(fields: [closureId], references: [id])
+  /// The CRM deal behind a row from the CRM deals sync, so each deal waits in review once.
+  crmDealRef String?            @unique
+  createdAt  DateTime           @default(now()) @db.Timestamptz(3)
 
   @@index([status])
 }

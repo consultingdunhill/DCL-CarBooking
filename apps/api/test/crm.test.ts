@@ -3,7 +3,7 @@
  * the nightly sync mirrors the CRM's portfolio without trampling our own edits, and
  * viewings go back to the CRM as they change.
  */
-import { CrmUnavailable, env, pushCrmViewings, stopBoss } from '@carbooking/server';
+import { CrmUnavailable, env, pushCrmViewings, stopBoss, syncCrmDeals } from '@carbooking/server';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp, loginAs, prisma, seedBasics, type Client } from './helpers';
@@ -20,6 +20,14 @@ const listing = (id: number, over: Record<string, unknown> = {}) => ({
   lat: null as number | null, lng: null as number | null, location_note: null as string | null, updated_at: '2026-10-28T00:00:00Z', ...over,
 });
 
+const deal = (id: number, over: Record<string, unknown> = {}) => ({
+  ref: `dqd:${id}`, id, lead_id: 40 + id, deal_type: 'SALE', signed_on: '2026-11-06', fee_kes: 150_000 as number | null,
+  agent_email: 'JANE@test.ke' as string | null, property_ref: 'dq:7' as string | null,
+  owner: null as { ref: string; name: string } | null,
+  owner_property: null as { ref: string; name: string | null; location_text: string | null; property_type: string | null } | null,
+  voided: false, updated_at: '2026-11-06T10:00:00Z', ...over,
+});
+
 /** What the fake CRM holds; each test edits it. */
 let crm: {
   listings: ReturnType<typeof listing>[];
@@ -29,6 +37,7 @@ let crm: {
   viewings: Record<string, any[]>;
   /** Booking ids the CRM answers 422 for. */
   refuse: Set<string>;
+  deals: ReturnType<typeof deal>[];
 };
 const seen: { url: string; auth: string | null }[] = [];
 
@@ -55,6 +64,7 @@ beforeEach(async () => {
     down: false,
     viewings: {},
     refuse: new Set(),
+    deals: [],
   };
   seen.length = 0;
   vi.stubGlobal('fetch', async (input: string | URL, init?: RequestInit) => {
@@ -63,6 +73,7 @@ beforeEach(async () => {
     if (crm.down) throw new TypeError('fetch failed');
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
     if (url.pathname === '/api/integrations/fleet/properties') return json(200, { properties: crm.listings });
+    if (url.pathname === '/api/integrations/fleet/deals') return json(200, { deals: crm.deals });
     const lead = url.pathname.match(/^\/api\/integrations\/fleet\/leads\/(\d+)$/);
     if (lead) return crm.leads[Number(lead[1])] ? json(200, crm.leads[Number(lead[1])]) : json(404, { detail: 'Not found' });
     const viewings = url.pathname.match(/^\/api\/integrations\/fleet\/bookings\/([\w-]+)\/viewings$/);
@@ -139,6 +150,7 @@ describe('a lead from the CRM', () => {
     try {
       expect((await admin.get('/crm/leads/42')).status).toBe(404);
       expect((await admin.post('/admin/crm/sync')).status).toBe(404);
+      expect((await admin.post('/admin/crm/sync-deals')).status).toBe(404);
     } finally {
       env.CRM_API_URL = saved;
     }
@@ -292,5 +304,107 @@ describe('viewings pushed to the CRM', () => {
     } finally {
       env.CRM_API_URL = saved;
     }
+  });
+});
+
+describe('signed deals', () => {
+  const closureFor = (ref: string) => prisma.closure.findUnique({ where: { crmRef: ref } });
+
+  it('become closures, follow corrections in the CRM, and go when voided there', async () => {
+    crm.deals = [deal(1)];
+    expect((await jane.post('/admin/crm/sync-deals')).status).toBe(403);
+
+    let r = await admin.post('/admin/crm/sync-deals');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ deals: 1, created: 1, awaitingReview: 0 });
+    const listing7 = await prisma.property.findUniqueOrThrow({ where: { crmRef: 'dq:7' } }); // synced first
+    expect(await closureFor('dqd:1')).toMatchObject({
+      propertyId: listing7.id, staffId: s.jane.id, dealType: 'SALE', closedAt: new Date('2026-11-06T09:00:00Z'),
+    });
+    expect(Number((await closureFor('dqd:1'))!.fee)).toBe(150_000);
+    // Whether it is sold is the CRM's to say, through the portfolio sync.
+    expect((await prisma.property.findUniqueOrThrow({ where: { id: listing7.id } })).status).toBe('ACTIVE');
+
+    expect((await admin.post('/admin/crm/sync-deals')).body).toMatchObject({ created: 0, unchanged: 1 });
+
+    crm.deals = [deal(1, { fee_kes: 175_000, signed_on: '2026-11-05' })];
+    expect((await admin.post('/admin/crm/sync-deals')).body).toMatchObject({ updated: 1 });
+    expect(Number((await closureFor('dqd:1'))!.fee)).toBe(175_000);
+
+    crm.deals = [deal(1, { voided: true })];
+    expect((await admin.post('/admin/crm/sync-deals')).body).toMatchObject({ removed: 1 });
+    expect(await closureFor('dqd:1')).toBeNull();
+
+    const last = await admin.get('/admin/crm/last-sync');
+    expect(last.body.deals).toMatchObject({ summary: { removed: 1 } });
+  });
+
+  it('wait in review once, and match by themselves when the work email turns up', async () => {
+    crm.deals = [deal(2, { agent_email: 'new.agent@test.ke' })];
+    expect((await admin.post('/admin/crm/sync-deals')).body).toMatchObject({ created: 0, awaitingReview: 1 });
+    expect((await admin.post('/admin/crm/sync-deals')).body).toMatchObject({ awaitingReview: 1 });
+    const queue = await admin.get('/admin/closures/review');
+    expect(queue.body).toHaveLength(1);
+    expect(queue.body[0]).toMatchObject({ raw: { source: 'CRM', deal_reference: 'dqd:2' }, problems: ['Unknown staff email "new.agent@test.ke"'] });
+
+    await prisma.user.create({ data: { name: 'New Agent', email: 'new.agent@test.ke' } });
+    expect((await admin.post('/admin/crm/sync-deals')).body).toMatchObject({ created: 1, resolved: 1, awaitingReview: 0 });
+    const row = await prisma.closureImportRow.findUniqueOrThrow({ where: { crmDealRef: 'dqd:2' } });
+    expect(row).toMatchObject({ status: 'RESOLVED', closureId: (await closureFor('dqd:2'))!.id });
+    expect((await admin.get('/admin/closures/review')).body).toHaveLength(0);
+  });
+
+  it("keep an admin's choices for what the CRM can't name, and stay ignored once ignored", async () => {
+    crm.deals = [deal(3, { agent_email: null, property_ref: 'dq:99' }), deal(4, { agent_email: null })];
+    await admin.post('/admin/crm/sync-deals');
+    const rows = await prisma.closureImportRow.findMany({ where: { crmDealRef: { not: null } }, orderBy: { crmDealRef: 'asc' } });
+    expect(rows.map((r) => r.crmDealRef)).toEqual(['dqd:3', 'dqd:4']);
+
+    const resolved = await admin.post(`/admin/closures/rows/${rows[0]!.id}/resolve`, { propertyId: s.property.id, staffId: s.tom.id });
+    expect(resolved.status).toBe(200);
+    expect((await admin.post(`/admin/closures/rows/${rows[1]!.id}/resolve`, { ignore: true })).status).toBe(200);
+
+    const r = await admin.post('/admin/crm/sync-deals');
+    expect(r.body).toMatchObject({ created: 0, unchanged: 1, awaitingReview: 0 });
+    expect(await closureFor('dqd:3')).toMatchObject({ propertyId: s.property.id, staffId: s.tom.id });
+    expect(await closureFor('dqd:4')).toBeNull();
+    expect((await prisma.closureImportRow.findUniqueOrThrow({ where: { crmDealRef: 'dqd:4' } })).status).toBe('IGNORED');
+  });
+
+  it('make owners clients, count a management contract, and leave instructions for later', async () => {
+    crm.deals = [
+      deal(5, {
+        deal_type: 'MANAGEMENT', property_ref: null, fee_kes: 90_000, owner: { ref: 'dql:45', name: 'Olu Owner' },
+        owner_property: { ref: 'dqo:45', name: 'Riverside Court', location_text: 'Kileleshwa', property_type: 'APARTMENT' },
+      }),
+      deal(6, { deal_type: 'SALE_INSTRUCTION', property_ref: 'dq:8', fee_kes: null, owner: { ref: 'dql:46', name: 'Vera Vendor' } }),
+    ];
+    let r = await admin.post('/admin/crm/sync-deals');
+    expect(r.body).toMatchObject({ deals: 2, created: 1, clientsCreated: 2, propertiesCreated: 1, errors: [] });
+
+    const riverside = await prisma.property.findUniqueOrThrow({ where: { crmRef: 'dqo:45' }, include: { client: true } });
+    expect(riverside).toMatchObject({ ref: 'DQO-45', address: 'Riverside Court, Kileleshwa', service: 'MANAGEMENT', needsReview: true, lat: null });
+    expect(riverside.client).toMatchObject({ name: 'Olu Owner', type: 'LANDLORD', crmRef: 'dql:45', phone: null });
+    expect(await closureFor('dqd:5')).toMatchObject({ propertyId: riverside.id, dealType: 'MANAGEMENT', staffId: s.jane.id });
+
+    const listing8 = await prisma.property.findUniqueOrThrow({ where: { crmRef: 'dq:8' }, include: { client: true } });
+    expect(listing8.client).toMatchObject({ name: 'Vera Vendor', type: 'VENDOR' });
+    expect(await closureFor('dqd:6')).toBeNull();
+
+    // The portfolio sync never withdraws an owner's property: it isn't a website listing.
+    await admin.post('/admin/crm/sync');
+    expect((await prisma.property.findUniqueOrThrow({ where: { id: riverside.id } })).status).toBe('ACTIVE');
+
+    r = await admin.post('/admin/crm/sync-deals');
+    expect(r.body).toMatchObject({ created: 0, unchanged: 1, clientsCreated: 0, propertiesCreated: 0 });
+  });
+
+  it('runs from the nightly job with nobody behind it', async () => {
+    crm.deals = [deal(7, { agent_email: null })];
+    await admin.post('/admin/crm/sync'); // the job syncs the portfolio first
+    expect(await syncCrmDeals()).toMatchObject({ awaitingReview: 1 });
+    const batch = await prisma.closureImportBatch.findFirstOrThrow({ where: { fileName: 'CRM deals sync' } });
+    expect(batch).toMatchObject({ uploadedById: null, rowCount: 1, unmatchedCount: 1 });
+    expect((await admin.get('/admin/closures/batches')).body[0]).toMatchObject({ fileName: 'CRM deals sync', uploadedBy: null });
   });
 });

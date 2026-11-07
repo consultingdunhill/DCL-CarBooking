@@ -17,8 +17,8 @@ import { ipOf, parse, type IdParams } from '../lib/http';
 
 const admin = { config: { auth: 'admin' as const } };
 
-/** A closure sets the property's status: sold or let. */
-const statusFor = (deal: DealType) => (deal === 'SALE' ? 'SOLD' : 'LET');
+/** A sale or letting sets the property's status; a management contract leaves it as it is. */
+const statusFor = (deal: DealType) => (deal === 'SALE' ? 'SOLD' : deal === 'LETTING' ? 'LET' : null);
 
 export async function closureRoutes(app: FastifyInstance) {
   app.get('/imports/templates/closures.csv', admin, async (_req, reply) => {
@@ -67,7 +67,8 @@ export async function closureRoutes(app: FastifyInstance) {
       const closure = await prisma.closure.create({
         data: { propertyId: m.propertyId!, staffId: m.staffId, closedAt, dealType: row.dealType!, fee: row.fee, crmRef: row.dealRef, importBatchId: batch.id },
       });
-      await prisma.property.update({ where: { id: m.propertyId! }, data: { status: statusFor(row.dealType!) } });
+      const status = statusFor(row.dealType!);
+      if (status) await prisma.property.update({ where: { id: m.propertyId! }, data: { status } });
       await prisma.closureImportRow.create({ data: { ...base, status: 'MATCHED', problems: [], closureId: closure.id } });
       matched++;
     }
@@ -121,7 +122,8 @@ export async function closureRoutes(app: FastifyInstance) {
           importBatchId: row.batchId,
         },
       });
-      await tx.property.update({ where: { id: body.propertyId }, data: { status: statusFor(dealType) } });
+      const status = statusFor(dealType);
+      if (status) await tx.property.update({ where: { id: body.propertyId }, data: { status } });
       await tx.closureImportRow.update({ where: { id: row.id }, data: { status: 'RESOLVED', closureId: c.id } });
       return c;
     });

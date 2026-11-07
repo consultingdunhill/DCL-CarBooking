@@ -1,6 +1,24 @@
 import { createHash } from 'node:crypto';
-import { CRM_PROPERTY_PREFIX, CrmLeadSchema, CrmListingSchema, crmListingToProperty, crmViewings, DAY, type CrmLead, type CrmListing } from '@carbooking/core';
-import { isUniqueViolation, prisma, type Property } from '@carbooking/db';
+import {
+  CRM_DEAL_PREFIX,
+  CRM_PROPERTY_PREFIX,
+  crmDealClient,
+  crmDealOwnerProperty,
+  crmDealRawRow,
+  CrmDealSchema,
+  crmDealToClosureRow,
+  CrmLeadSchema,
+  CrmListingSchema,
+  crmListingToProperty,
+  crmViewings,
+  DAY,
+  matchClosureRow,
+  zonedTimeToUtc,
+  type CrmDeal,
+  type CrmLead,
+  type CrmListing,
+} from '@carbooking/core';
+import { isUniqueViolation, num, prisma, type Prisma, type Property } from '@carbooking/db';
 import { z } from 'zod';
 import { audit } from './audit';
 import { env } from './env';
@@ -201,5 +219,183 @@ export async function pushCrmViewings(now = new Date()): Promise<CrmViewingsPush
     });
     summary.pushed++;
   }
+  return summary;
+}
+
+export interface CrmDealsSyncSummary {
+  deals: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  /** Closures dropped because their deal was voided, or is gone from the CRM. */
+  removed: number;
+  /** Deals that could not be matched (no work email, unknown listing): in the review queue. */
+  awaitingReview: number;
+  /** Deals that waited in review and matched on this run, e.g. once a work email was filled in. */
+  resolved: number;
+  clientsCreated: number;
+  propertiesCreated: number;
+  errors: { ref: string; error: string }[];
+}
+
+/**
+ * The owner as our client, and their property in our portfolio: either the CRM listing
+ * they signed for, or their own property, which waits for a pin like any new one.
+ */
+async function syncDealOwner(d: CrmDeal, summary: CrmDealsSyncSummary): Promise<void> {
+  const want = crmDealClient(d);
+  if (!want) return;
+  let client = await prisma.client.findUnique({ where: { crmRef: want.crmRef } });
+  if (!client) {
+    client = await prisma.client.create({ data: want });
+    summary.clientsCreated++;
+  } else if (client.name !== want.name) {
+    client = await prisma.client.update({ where: { id: client.id }, data: { name: want.name } });
+  }
+
+  const own = crmDealOwnerProperty(d);
+  if (own) {
+    const have = await prisma.property.findUnique({ where: { crmRef: own.crmRef } });
+    if (!have) {
+      await prisma.property.create({ data: { ...own, clientId: client.id, needsReview: true } });
+      summary.propertiesCreated++;
+    } else if (have.clientId !== client.id || have.service !== own.service) {
+      // The address is ours to correct once it exists, as with listings.
+      await prisma.property.update({ where: { id: have.id }, data: { clientId: client.id, service: own.service } });
+    }
+  } else if (d.property_ref) {
+    // Signed for a listing already on the website: it is theirs, unless an admin said otherwise.
+    await prisma.property.updateMany({ where: { crmRef: d.property_ref, clientId: null }, data: { clientId: client.id } });
+  }
+}
+
+/**
+ * Pull the CRM's signed deals as closures. The CRM owns them: a deal corrected there is
+ * corrected here, and one voided there is dropped here. Deals go through the same matching
+ * as the closures CSV; one that can't be matched waits in the review queue, once, and is
+ * matched by itself on a later run when it can be. Property status is left to the
+ * property sync, because the CRM owns that too.
+ *
+ * Run it after syncCrmProperties, so a listing added today is here to match.
+ */
+export async function syncCrmDeals(actorId: string | null = null): Promise<CrmDealsSyncSummary> {
+  const body = await crmGet('/api/integrations/fleet/deals', z.object({ deals: z.array(CrmDealSchema) }));
+  const deals: CrmDeal[] = body!.deals;
+  const summary: CrmDealsSyncSummary = {
+    deals: deals.length, created: 0, updated: 0, unchanged: 0, removed: 0, awaitingReview: 0, resolved: 0,
+    clientsCreated: 0, propertiesCreated: 0, errors: [],
+  };
+  const fail = (ref: string, err: unknown) => summary.errors.push({ ref, error: (err as Error).message.slice(0, 300) });
+
+  // Owners first: a management contract's closure is on the owner's property.
+  for (const d of deals) {
+    if (!d.voided) await syncDealOwner(d, summary).catch((err) => fail(d.ref, err));
+  }
+
+  const { timezone } = await getSettings();
+  const [properties, users, closures, reviewRows] = await Promise.all([
+    prisma.property.findMany({ where: { crmRef: { not: null } }, select: { id: true, crmRef: true } }),
+    prisma.user.findMany({ select: { id: true, email: true } }),
+    prisma.closure.findMany({ where: { crmRef: { startsWith: CRM_DEAL_PREFIX } } }),
+    prisma.closureImportRow.findMany({ where: { crmDealRef: { not: null } } }),
+  ]);
+  const byCrm = new Map(properties.map((p) => [p.crmRef!.toLowerCase(), { id: p.id }]));
+  const byEmail = new Map(users.map((u) => [u.email.toLowerCase(), { id: u.id }]));
+  const closureFor = new Map(closures.map((c) => [c.crmRef!, c]));
+  const reviewFor = new Map(reviewRows.map((r) => [r.crmDealRef!, r]));
+
+  let batch: { id: string; rows: number } | null = null;
+  const reviewBatch = async () =>
+    (batch ??= {
+      id: (await prisma.closureImportBatch.create({
+        data: { fileName: 'CRM deals sync', uploadedById: actorId, rowCount: 0, matchedCount: 0, unmatchedCount: 0 },
+      })).id,
+      rows: 0,
+    });
+
+  const live = new Set<string>();
+  for (const d of deals) {
+    const row = crmDealToClosureRow(d);
+    if (d.voided || !row) continue;
+    live.add(d.ref);
+    try {
+      const m = matchClosureRow(row, byCrm, byEmail);
+      const closedAt = zonedTimeToUtc(d.signed_on, '12:00', timezone);
+      const have = closureFor.get(d.ref);
+
+      if (have) {
+        // Corrections flow from the CRM. A property or person it names that we can't match
+        // leaves what an admin chose in review; a fee it doesn't know leaves the one we have.
+        const data: Prisma.ClosureUncheckedUpdateInput = {
+          closedAt,
+          dealType: row.dealType!,
+          fee: row.fee ?? num(have.fee),
+          ...(m.propertyId ? { propertyId: m.propertyId } : {}),
+          ...(m.staffId ? { staffId: m.staffId } : {}),
+        };
+        const same =
+          have.closedAt.getTime() === closedAt.getTime() && have.dealType === data.dealType && num(have.fee) === data.fee &&
+          (!m.propertyId || have.propertyId === m.propertyId) && (!m.staffId || have.staffId === m.staffId);
+        if (same) summary.unchanged++;
+        else {
+          await prisma.closure.update({ where: { id: have.id }, data });
+          summary.updated++;
+        }
+        continue;
+      }
+
+      const review = reviewFor.get(d.ref);
+      if (m.status === 'MATCHED') {
+        await prisma.$transaction(async (tx) => {
+          const c = await tx.closure.create({
+            data: { propertyId: m.propertyId!, staffId: m.staffId, closedAt, dealType: row.dealType!, fee: row.fee, crmRef: d.ref, importBatchId: review?.batchId ?? null },
+          });
+          if (review?.status === 'UNMATCHED') {
+            await tx.closureImportRow.update({ where: { id: review.id }, data: { status: 'RESOLVED', problems: [], closureId: c.id } });
+          }
+        });
+        summary.created++;
+        if (review?.status === 'UNMATCHED') summary.resolved++;
+        continue;
+      }
+
+      // Unmatched: one review row per deal, kept up to date. One an admin ignored stays ignored.
+      const raw = crmDealRawRow(d) as Prisma.InputJsonValue;
+      if (!review) {
+        const b = await reviewBatch();
+        await prisma.closureImportRow.create({
+          data: { batchId: b.id, rowNumber: ++b.rows, raw, status: 'UNMATCHED', problems: m.problems, crmDealRef: d.ref },
+        });
+        summary.awaitingReview++;
+      } else if (review.status === 'UNMATCHED') {
+        await prisma.closureImportRow.update({ where: { id: review.id }, data: { raw, problems: m.problems } });
+        summary.awaitingReview++;
+      }
+    } catch (err) {
+      fail(d.ref, err);
+    }
+  }
+
+  // Voided, or gone from the CRM altogether: drop the closure, and stop asking about it.
+  for (const [ref, c] of closureFor) {
+    if (live.has(ref)) continue;
+    await prisma
+      .$transaction([
+        prisma.closureImportRow.updateMany({ where: { closureId: c.id }, data: { closureId: null, status: 'IGNORED' } }),
+        prisma.closure.delete({ where: { id: c.id } }),
+      ])
+      .then(() => summary.removed++)
+      .catch((err) => fail(ref, err));
+  }
+  await prisma.closureImportRow.updateMany({
+    where: { status: 'UNMATCHED', crmDealRef: { not: null, notIn: [...live] } },
+    data: { status: 'IGNORED' },
+  });
+
+  if (batch) {
+    const { id, rows } = batch;
+    await prisma.closureImportBatch.update({ where: { id }, data: { rowCount: rows, unmatchedCount: rows } });
+  }
+  await audit({ actorId, action: 'CRM_DEALS_SYNCED', entity: 'Closure', after: { ...summary, errors: summary.errors.slice(0, 50) } });
   return summary;
 }

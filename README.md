@@ -97,5 +97,5 @@ Fleet is hosted with Docker on the server it shares with the CRM. The step-by-st
 ## Open questions (from the plan)
 
 - How a trip's fuel and travel time are shared across its stops (currently equal split, configurable).
-- ~~Which CRM~~ Decided: the Dunhill CRM (`diwaliqr`), linked by `CRM_API_URL` / `CRM_API_TOKEN`. Its users are the sales staff and need a Fleet account under the same Microsoft work email; management and other staff use Fleet only. Closures still come in by CSV (template at Admin → CRM closures) until the deals link is built.
+- ~~Which CRM~~ Decided: the Dunhill CRM (`diwaliqr`), linked by `CRM_API_URL` / `CRM_API_TOKEN`. Its users are the sales staff and need a Fleet account under the same Microsoft work email; management and other staff use Fleet only. Deals signed in the CRM arrive nightly as closures (a management contract counts too; an instruction to sell or let adds the owner as a client and waits until it sells or lets). The CSV upload at Admin → CRM closures stays as a fallback.
 - Hourly cost rates per job role and for the driver (seeded with placeholders; set them in Admin → Hourly rates).

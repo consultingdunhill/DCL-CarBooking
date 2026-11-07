@@ -8,7 +8,7 @@
  *  - GPS retention (raw points kept for the retention period)
  *  - notification dispatch (push, email, SMS/WhatsApp)
  *  - the linked WhatsApp device, when WHATSAPP_PROVIDER=baileys
- *  - the CRM's portfolio, nightly, when CRM_API_URL is set
+ *  - the CRM's portfolio, then its signed deals (as closures), nightly, when CRM_API_URL is set
  *  - viewings (stops booked for CRM leads) pushed back to the CRM as they change
  */
 import { prisma } from '@carbooking/db';
@@ -28,6 +28,7 @@ import {
   startWhatsapp,
   stopBoss,
   stopWhatsapp,
+  syncCrmDeals,
   syncCrmProperties,
 } from '@carbooking/server';
 
@@ -60,8 +61,11 @@ const schedules: [string, string, (now: Date) => Promise<unknown>][] = [
   }],
   [QUEUES.retention, '30 2 * * *', runGpsRetention],
   // 04:00 in Nairobi: an hour after the CRM's own nightly scrape of the website.
+  // Deals second, so a listing added today is here for its deal to match.
   [QUEUES.crmSync, '0 1 * * *', async () => {
-    if (crmEnabled()) console.log('[crm.sync]', await syncCrmProperties());
+    if (!crmEnabled()) return;
+    console.log('[crm.sync]', await syncCrmProperties());
+    console.log('[crm.sync-deals]', await syncCrmDeals());
   }],
   [QUEUES.crmViewings, '* * * * *', async (now) => {
     const r = await pushCrmViewings(now);
