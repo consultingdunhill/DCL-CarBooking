@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { crmListingToProperty, crmViewings, crmViewingStatus, type CrmListing, type CrmViewingBooking } from './crm';
+import {
+  crmDealClient,
+  crmDealOwnerProperty,
+  CrmDealSchema,
+  crmDealRawRow,
+  crmDealToClosureRow,
+  crmListingToProperty,
+  crmViewings,
+  crmViewingStatus,
+  type CrmDeal,
+  type CrmListing,
+  type CrmViewingBooking,
+} from './crm';
+import { matchClosureRow, parseClosureRow } from './imports';
 
 const listing = (over: Partial<CrmListing> = {}): CrmListing => ({
   ref: 'dq:42',
@@ -147,5 +160,82 @@ describe('crmViewings', () => {
     const b = booking({ status: 'COMPLETED', trip, stops });
     expect(crmViewings(b, 'EQUAL').map((v) => [v.status, v.car_km])).toEqual([['VISITED', 15], ['SKIPPED', null]]);
     expect(crmViewings(b, 'DWELL_TIME')[0]!.car_km).toBe(20);
+  });
+});
+
+const deal = (over: Partial<CrmDeal> = {}): CrmDeal => ({
+  ref: 'dqd:5',
+  id: 5,
+  lead_id: 42,
+  deal_type: 'SALE',
+  signed_on: '2026-11-06',
+  fee_kes: 150_000,
+  agent_email: ' Jane@Test.ke ',
+  property_ref: 'dq:7',
+  owner: null,
+  owner_property: null,
+  voided: false,
+  ...over,
+});
+
+const owner = (over: Partial<CrmDeal> = {}) =>
+  deal({
+    deal_type: 'MANAGEMENT',
+    property_ref: null,
+    owner: { ref: 'dql:42', name: 'Olu Owner' },
+    owner_property: { ref: 'dqo:42', name: 'Riverside Court', location_text: 'Kileleshwa', property_type: 'APARTMENT' },
+    ...over,
+  });
+
+describe('CRM deals', () => {
+  it('reads what the CRM sends, and refuses a ref that is not a deal', () => {
+    expect(CrmDealSchema.parse({ ...deal(), extra: 'ignored' }).ref).toBe('dqd:5');
+    expect(() => CrmDealSchema.parse({ ...deal(), ref: '5' })).toThrow();
+    expect(() => CrmDealSchema.parse({ ...deal(), signed_on: '6 Nov' })).toThrow();
+  });
+
+  it('makes a sale a closure row that matches like a CSV one', () => {
+    const row = crmDealToClosureRow(deal())!;
+    expect(row).toEqual({ propertyCrmRef: 'dq:7', staffEmail: 'jane@test.ke', closedAt: new Date('2026-11-06T00:00:00Z'), dealType: 'SALE', fee: 150_000, dealRef: 'dqd:5' });
+    const m = matchClosureRow(row, new Map([['dq:7', { id: 'p7' }]]), new Map([['jane@test.ke', { id: 'u1' }]]));
+    expect(m).toMatchObject({ status: 'MATCHED', propertyId: 'p7', staffId: 'u1' });
+  });
+
+  it("counts a management contract as a closure on the owner's property", () => {
+    expect(crmDealToClosureRow(owner())).toMatchObject({ dealType: 'MANAGEMENT', propertyCrmRef: 'dqo:42' });
+  });
+
+  it('does not count an instruction to sell or let until it sells or lets', () => {
+    expect(crmDealToClosureRow(owner({ deal_type: 'SALE_INSTRUCTION' }))).toBeNull();
+    expect(crmDealToClosureRow(owner({ deal_type: 'LET_INSTRUCTION' }))).toBeNull();
+  });
+
+  it('leaves an unknown fee and agent unknown, so the deal waits in review', () => {
+    const row = crmDealToClosureRow(deal({ fee_kes: null, agent_email: null }))!;
+    expect(row.fee).toBeNull();
+    expect(matchClosureRow(row, new Map([['dq:7', { id: 'p7' }]]), new Map()).problems).toEqual(['No staff email']);
+  });
+
+  it('writes a review row the resolve form reads back as the same closure', () => {
+    const raw = crmDealRawRow(deal());
+    expect(raw.source).toBe('CRM');
+    expect(parseClosureRow(raw)).toEqual({ ...crmDealToClosureRow(deal()), closedAt: parseClosureRow(raw).closedAt });
+    expect(parseClosureRow(raw).closedAt?.toISOString().slice(0, 10)).toBe('2026-11-06');
+  });
+
+  it('makes the owner a client, and only for owner deals', () => {
+    expect(crmDealClient(owner())).toEqual({ crmRef: 'dql:42', name: 'Olu Owner', type: 'LANDLORD' });
+    expect(crmDealClient(owner({ deal_type: 'SALE_INSTRUCTION' }))?.type).toBe('VENDOR');
+    expect(crmDealClient(deal({ owner: { ref: 'dql:1', name: 'A Buyer' } }))).toBeNull();
+  });
+
+  it("describes an owner's unlisted property, waiting for a pin", () => {
+    expect(crmDealOwnerProperty(owner())).toEqual({
+      crmRef: 'dqo:42', ref: 'DQO-42', address: 'Riverside Court, Kileleshwa', service: 'MANAGEMENT', status: 'ACTIVE', lat: null, lng: null,
+    });
+    expect(crmDealOwnerProperty(owner({ deal_type: 'LET_INSTRUCTION' }))?.service).toBe('LETTINGS');
+    const bare = owner({ owner_property: { ref: 'dqo:42', name: null, location_text: null, property_type: null } });
+    expect(crmDealOwnerProperty(bare)?.address).toBe("Olu Owner's property");
+    expect(crmDealOwnerProperty(deal())).toBeNull();
   });
 });

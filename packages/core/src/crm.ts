@@ -2,7 +2,8 @@
 // its records map onto ours. The CRM owns leads and website listings; Fleet owns trips.
 import { z } from 'zod';
 import { dwellHours, stopShares, STOPS_THAT_HAPPENED } from './costs';
-import type { BookingStatus, PropertyService, PropertyStatus, StopCostSplit, StopStatus } from './enums';
+import type { BookingStatus, ClientType, DealType, PropertyService, PropertyStatus, StopCostSplit, StopStatus } from './enums';
+import type { ClosureRow } from './imports';
 
 /** Prefix of Property.crmRef for listings that came from the CRM ("dq:42"). */
 export const CRM_PROPERTY_PREFIX = 'dq:';
@@ -167,4 +168,113 @@ export function crmViewings(b: CrmViewingBooking, split: StopCostSplit): CrmView
       departed_at: s.departedAt?.toISOString() ?? null,
       car_km: km.get(s.id) ?? null,
     }));
+}
+
+// ── Deals, pulled from the CRM as closures ────────────────────────────────────
+
+/** Prefixes of the refs the CRM gives deals, owners and owners' unlisted properties. */
+export const CRM_DEAL_PREFIX = 'dqd:';
+export const CRM_OWNER_PREFIX = 'dql:';
+export const CRM_OWNER_PROPERTY_PREFIX = 'dqo:';
+
+export const CRM_DEAL_TYPES = ['SALE', 'LETTING', 'MANAGEMENT', 'SALE_INSTRUCTION', 'LET_INSTRUCTION'] as const;
+export type CrmDealType = (typeof CRM_DEAL_TYPES)[number];
+
+export const CrmDealSchema = z.object({
+  ref: z.string().startsWith(CRM_DEAL_PREFIX),
+  id: z.number().int(),
+  lead_id: z.number().int(),
+  deal_type: z.enum(CRM_DEAL_TYPES),
+  /** A calendar day in Nairobi, YYYY-MM-DD. */
+  signed_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  fee_kes: z.number().nonnegative().nullable(),
+  agent_email: z.string().nullable(),
+  property_ref: z.string().startsWith(CRM_PROPERTY_PREFIX).nullable(),
+  owner: z.object({ ref: z.string().startsWith(CRM_OWNER_PREFIX), name: z.string().min(1) }).nullable(),
+  owner_property: z
+    .object({
+      ref: z.string().startsWith(CRM_OWNER_PROPERTY_PREFIX),
+      name: z.string().nullable(),
+      location_text: z.string().nullable(),
+      property_type: z.string().nullable(),
+    })
+    .nullable(),
+  voided: z.boolean(),
+});
+export type CrmDeal = z.infer<typeof CrmDealSchema>;
+
+/**
+ * The closure a deal makes here. An instruction to sell or let is not one yet: it
+ * becomes a closure when the property sells or lets, which the CRM records as its own deal.
+ */
+export function crmDealClosureType(t: CrmDealType): DealType | null {
+  return t === 'SALE' || t === 'LETTING' || t === 'MANAGEMENT' ? t : null;
+}
+
+/** The property a deal is on: one of the CRM's listings, or the owner's own property. */
+export const crmDealPropertyRef = (d: Pick<CrmDeal, 'property_ref' | 'owner_property'>) => d.property_ref ?? d.owner_property?.ref ?? null;
+
+/** A deal as a closures-import row, so it goes through the same matching as the CSV. */
+export function crmDealToClosureRow(d: CrmDeal): ClosureRow | null {
+  const dealType = crmDealClosureType(d.deal_type);
+  if (!dealType) return null;
+  return {
+    propertyCrmRef: crmDealPropertyRef(d),
+    staffEmail: d.agent_email?.trim().toLowerCase() || null,
+    closedAt: new Date(`${d.signed_on}T00:00:00Z`),
+    dealType,
+    fee: d.fee_kes,
+    dealRef: d.ref,
+  };
+}
+
+/** The same deal in the CSV template's columns: what the review queue shows and re-reads. */
+export function crmDealRawRow(d: CrmDeal): Record<string, string> {
+  return {
+    property_crm_reference: crmDealPropertyRef(d) ?? '',
+    staff_email: d.agent_email?.trim().toLowerCase() ?? '',
+    closed_at: d.signed_on,
+    deal_type: crmDealClosureType(d.deal_type) ?? '',
+    fee: d.fee_kes == null ? '' : String(d.fee_kes),
+    deal_reference: d.ref,
+    source: 'CRM',
+  };
+}
+
+const OWNER_CLIENT_TYPE: Record<Exclude<CrmDealType, 'SALE' | 'LETTING'>, ClientType> = {
+  MANAGEMENT: 'LANDLORD',
+  SALE_INSTRUCTION: 'VENDOR',
+  LET_INSTRUCTION: 'LANDLORD',
+};
+
+const OWNER_SERVICE: Record<Exclude<CrmDealType, 'SALE' | 'LETTING'>, PropertyService> = {
+  MANAGEMENT: 'MANAGEMENT',
+  SALE_INSTRUCTION: 'SALES',
+  LET_INSTRUCTION: 'LETTINGS',
+};
+
+/** The owner who signed, as a client of ours. Null for a buyer or tenant. */
+export function crmDealClient(d: CrmDeal): { crmRef: string; name: string; type: ClientType } | null {
+  if (!d.owner || d.deal_type === 'SALE' || d.deal_type === 'LETTING') return null;
+  return { crmRef: d.owner.ref, name: d.owner.name.trim(), type: OWNER_CLIENT_TYPE[d.deal_type] };
+}
+
+/**
+ * The owner's property when it is not one of the CRM's listings. It has no pin yet, so it
+ * waits for an admin's review like a property staff add while booking.
+ */
+export function crmDealOwnerProperty(d: CrmDeal): CrmPropertyFields | null {
+  const p = d.owner_property;
+  if (!p || d.deal_type === 'SALE' || d.deal_type === 'LETTING') return null;
+  const name = p.name?.trim();
+  const where = p.location_text?.trim();
+  return {
+    crmRef: p.ref,
+    ref: `DQO-${p.ref.slice(CRM_OWNER_PROPERTY_PREFIX.length)}`,
+    address: [name, where && !name?.toLowerCase().includes(where.toLowerCase()) ? where : null].filter(Boolean).join(', ') || `${d.owner?.name ?? 'Owner'}'s property`,
+    service: OWNER_SERVICE[d.deal_type],
+    status: 'ACTIVE',
+    lat: null,
+    lng: null,
+  };
 }

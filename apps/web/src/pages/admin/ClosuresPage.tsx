@@ -1,6 +1,6 @@
 import { DEAL_TYPES, parseClosureRow, ResolveClosureRowSchema, type DealType } from '@carbooking/core';
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, FileSpreadsheet, Handshake, Inbox } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileSpreadsheet, Handshake, Inbox, RefreshCw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Callout, ConfirmDialog, dash, QueryBlock, SearchInput, UnitInput, useDebounced } from '@/components/admin/common';
@@ -10,7 +10,7 @@ import { DEAL_TYPE_LABELS } from '@/components/admin/labels';
 import { Page } from '@/components/Shell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, Input, Label, Select } from '@/components/ui/form';
 import { Dl, EmptyState, PageHeader, Spinner, Stat, Table, Tabs, TabsContent, TabsList, TabsTrigger, Td, Th } from '@/components/ui/misc';
@@ -39,13 +39,15 @@ export function ClosuresPage() {
 
   return (
     <Page wide>
-      <PageHeader title="CRM closures" description="Sales and lettings closed in the CRM, set against what the viewings cost." />
+      <PageHeader title="CRM closures" description="Sales, lettings and management contracts signed in the CRM, set against what the viewings cost." />
+
+      <CrmDealsCard onSynced={refresh} onReview={() => setTab('review')} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-        <Callout title="How closures get here" icon={<Handshake />}>
-          Upload the closures export from the CRM, for example once a month. Each row is matched to a property by its <strong>CRM reference</strong> and to a staff
-          member by <strong>email</strong>. A matched closure marks the property sold or let. Rows that don't match wait in the review queue below; rows already
-          imported are skipped as duplicates.
+        <Callout title="Closures from a spreadsheet" icon={<Handshake />}>
+          Deals signed in the CRM arrive by themselves every night. For closures that aren't in the CRM, upload a CSV. Each row is matched to a property by its{' '}
+          <strong>CRM reference</strong> and to a staff member by <strong>email</strong>. A matched sale or letting marks the property sold or let. Rows that don't
+          match wait in the review queue below; rows already imported are skipped as duplicates.
         </Callout>
 
         <ImportCard<ClosureImportBatch>
@@ -96,6 +98,67 @@ export function ClosuresPage() {
   );
 }
 
+// ── CRM deals ─────────────────────────────────────────────────────────────────
+
+interface CrmDealsSyncSummary {
+  deals: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  removed: number;
+  awaitingReview: number;
+  resolved: number;
+  clientsCreated: number;
+  propertiesCreated: number;
+  errors: { ref: string; error: string }[];
+}
+
+/** Deals signed in the CRM, pulled nightly; hidden when the CRM link isn't set up. */
+function CrmDealsCard({ onSynced, onReview }: { onSynced: () => void; onReview: () => void }) {
+  const qc = useQueryClient();
+  const fmt = useFormat();
+  const last = useQuery({
+    queryKey: ['crm', 'last-sync'],
+    queryFn: () => get<{ enabled: boolean; deals: { at: string | null; summary: CrmDealsSyncSummary | null } }>('/admin/crm/last-sync'),
+  });
+  const sync = useMutation({
+    mutationFn: () => post<CrmDealsSyncSummary>('/admin/crm/sync-deals'),
+    onSuccess: (r) => {
+      toast.success(`Synced ${r.deals} CRM deals: ${r.created} new closures, ${r.updated} updated, ${r.removed} removed`);
+      onSynced();
+      void qc.invalidateQueries({ queryKey: ['crm', 'last-sync'] });
+      if (r.awaitingReview > 0) onReview();
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+  if (!last.data?.enabled) return null;
+  const { at, summary: s } = last.data.deals;
+  return (
+    <Card className="mb-6">
+      <CardHeader
+        title="Deals from the CRM"
+        description="Agents record each signed deal in the CRM. Every night at 04:00 it becomes a closure here; a deal corrected or voided in the CRM is corrected or dropped here too. A signed instruction to sell or let isn't a closure yet: the owner is added as a client, with their property."
+        actions={
+          <Button variant="secondary" onClick={() => sync.mutate()} loading={sync.isPending}>
+            <RefreshCw /> Sync now
+          </Button>
+        }
+      />
+      <CardBody className="text-sm text-muted-fg">
+        {at && s ? (
+          <>
+            Last synced {fmt.relative(at)}: {s.deals} deals, {s.created} new closures, {s.updated} updated, {s.removed} removed
+            {s.awaitingReview > 0 && <span className="text-warning">, {s.awaitingReview} waiting in the review queue</span>}.
+            {s.errors.length > 0 && <span className="text-danger"> {s.errors.length} could not be synced: {s.errors.map((e) => `${e.ref} (${e.error})`).join('; ')}.</span>}
+          </>
+        ) : (
+          'Not synced yet.'
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 // ── Review queue ──────────────────────────────────────────────────────────────
 
 function ReviewQueue({ query, onChanged }: { query: UseQueryResult<ClosureImportRow[]>; onChanged: () => void }) {
@@ -122,14 +185,24 @@ function ReviewQueue({ query, onChanged }: { query: UseQueryResult<ClosureImport
         {(rows) => (
           <ul className="divide-y divide-border">
             {rows.map((row) => {
-              const fields = Object.entries(row.raw).filter(([, v]) => v != null && String(v).trim() !== '');
+              const fromCrm = row.raw.source === 'CRM';
+              const fields = Object.entries(row.raw).filter(([k, v]) => k !== 'source' && v != null && String(v).trim() !== '');
               return (
                 <li key={row.id} className="space-y-3 px-5 py-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="font-medium">Row {row.rowNumber}</p>
+                      <p className="font-medium">{fromCrm ? `CRM deal ${row.raw.deal_reference}` : `Row ${row.rowNumber}`}</p>
                       <p className="flex items-center gap-1.5 text-xs text-muted-fg">
-                        <FileSpreadsheet className="size-3.5" /> {row.batch.fileName} · uploaded {fmt.dateTime(row.batch.uploadedAt)}
+                        {fromCrm ? (
+                          <>
+                            <RefreshCw className="size-3.5" /> From the CRM deals sync, {fmt.dateTime(row.batch.uploadedAt)}. Fix it in the CRM (a work email, the listing)
+                            and it matches by itself on the next sync, or resolve it here.
+                          </>
+                        ) : (
+                          <>
+                            <FileSpreadsheet className="size-3.5" /> {row.batch.fileName} · uploaded {fmt.dateTime(row.batch.uploadedAt)}
+                          </>
+                        )}
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -374,7 +447,7 @@ function ClosuresList() {
   const closures = useQuery({ queryKey: LIST_KEY, queryFn: () => get<Closure[]>('/admin/closures') });
   return (
     <Card>
-      <QueryBlock query={closures} empty={<EmptyState icon={<Handshake />} title="No closures yet" description="Upload the CRM's closures export to see them here." />}>
+      <QueryBlock query={closures} empty={<EmptyState icon={<Handshake />} title="No closures yet" description="Deals signed in the CRM appear here after the nightly sync, or press Sync now above." />}>
         {(rows) => {
           const totalFees = rows.reduce((s, c) => s + (c.fee ?? 0), 0);
           return (
@@ -383,6 +456,7 @@ function ClosuresList() {
                 <Stat label="Closures" value={rows.length} />
                 <Stat label="Sales" value={rows.filter((c) => c.dealType === 'SALE').length} />
                 <Stat label="Lettings" value={rows.filter((c) => c.dealType === 'LETTING').length} />
+                <Stat label="Management" value={rows.filter((c) => c.dealType === 'MANAGEMENT').length} />
                 <Stat label="Fees" value={fmt.money(totalFees)} />
               </div>
               <Table>
@@ -406,7 +480,7 @@ function ClosuresList() {
                       </Td>
                       <Td className="whitespace-nowrap">{c.staff?.name ?? dash}</Td>
                       <Td>
-                        <Badge tone={c.dealType === 'SALE' ? 'info' : 'primary'}>{DEAL_TYPE_LABELS[c.dealType]}</Badge>
+                        <Badge tone={c.dealType === 'SALE' ? 'info' : c.dealType === 'LETTING' ? 'primary' : 'neutral'}>{DEAL_TYPE_LABELS[c.dealType]}</Badge>
                       </Td>
                       <Td className="tabular text-right whitespace-nowrap">{c.fee != null ? fmt.money(c.fee) : dash}</Td>
                       <Td className="whitespace-nowrap">{c.crmRef ?? dash}</Td>
@@ -446,7 +520,7 @@ function Imports() {
                 <tr key={b.id}>
                   <Td className="font-medium">{b.fileName}</Td>
                   <Td className="whitespace-nowrap">{fmt.dateTime(b.uploadedAt)}</Td>
-                  <Td className="whitespace-nowrap">{b.uploadedBy?.name ?? dash}</Td>
+                  <Td className="whitespace-nowrap">{b.uploadedBy?.name ?? (b.fileName === 'CRM deals sync' ? 'Nightly sync' : dash)}</Td>
                   <Td className="tabular text-right">{b.rowCount}</Td>
                   <Td className="tabular text-right text-success">{b.matchedCount}</Td>
                   <Td className={cn('tabular text-right', b.unmatchedCount > 0 && 'text-warning')}>{b.unmatchedCount}</Td>

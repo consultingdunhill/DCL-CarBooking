@@ -155,7 +155,15 @@ export function parseClosureRow(raw: RawRow): ClosureRow {
     propertyCrmRef: pick(raw, ['property_crm_reference', 'property_crm_ref', 'crm_reference', 'crm_ref', 'property_ref', 'property_reference']) ?? null,
     staffEmail: pick(raw, ['staff_email', 'agent_email', 'negotiator_email', 'email'])?.toLowerCase() ?? null,
     closedAt: parseCsvDate(pick(raw, ['closed_at', 'date_closed', 'closing_date', 'completion_date', 'date'])),
-    dealType: enumOf(DEAL_TYPES, pick(raw, ['deal_type', 'type']), { SALES: 'SALE', SOLD: 'SALE', LET: 'LETTING', LETTINGS: 'LETTING', RENTAL: 'LETTING' }),
+    dealType: enumOf(DEAL_TYPES, pick(raw, ['deal_type', 'type']), {
+      SALES: 'SALE',
+      SOLD: 'SALE',
+      LET: 'LETTING',
+      LETTINGS: 'LETTING',
+      RENTAL: 'LETTING',
+      PROPERTY_MANAGEMENT: 'MANAGEMENT',
+      MANAGED: 'MANAGEMENT',
+    }),
     fee: parseAmount(pick(raw, ['fee', 'commission', 'fee_kes'])),
     dealRef: pick(raw, ['deal_reference', 'deal_ref', 'deal_id', 'closure_id']) ?? null,
   };
@@ -185,7 +193,7 @@ export function matchClosureRow(
   if (!row.staffEmail) problems.push('No staff email');
   else if (!staff) problems.push(`Unknown staff email "${row.staffEmail}"`);
   if (!row.closedAt) problems.push('Missing or unreadable closing date');
-  if (!row.dealType) problems.push('Deal type must be sale or letting');
+  if (!row.dealType) problems.push('Deal type must be sale, letting or management');
   return {
     status: problems.length === 0 ? 'MATCHED' : 'UNMATCHED',
     propertyId: property?.id ?? null,

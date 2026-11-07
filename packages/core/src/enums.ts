@@ -82,7 +82,8 @@ export type PropertyService = (typeof PROPERTY_SERVICES)[number];
 export const PROPERTY_STATUSES = ['ACTIVE', 'SOLD', 'LET', 'WITHDRAWN'] as const;
 export type PropertyStatus = (typeof PROPERTY_STATUSES)[number];
 
-export const DEAL_TYPES = ['SALE', 'LETTING'] as const;
+/** MANAGEMENT is a management contract an owner signed (from the CRM). */
+export const DEAL_TYPES = ['SALE', 'LETTING', 'MANAGEMENT'] as const;
 export type DealType = (typeof DEAL_TYPES)[number];
 
 export const IMPORT_ROW_STATUSES = ['MATCHED', 'UNMATCHED', 'RESOLVED', 'IGNORED', 'DUPLICATE'] as const;

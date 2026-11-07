@@ -36,6 +36,7 @@ export const PROPERTY_STATUS: Record<PropertyStatus, { label: string; tone: Tone
 export const DEAL_TYPE_LABELS: Record<DealType, string> = {
   SALE: 'Sale',
   LETTING: 'Letting',
+  MANAGEMENT: 'Management',
 };
 
 export const FUEL_ENTRY_TYPE_LABELS: Record<FuelEntryType, string> = {

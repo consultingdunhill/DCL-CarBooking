@@ -1,6 +1,6 @@
 import { DomainError, forbidden, notFound } from '@carbooking/core';
 import { prisma } from '@carbooking/db';
-import { crmEnabled, CrmUnavailable, ensureCrmProperties, fetchCrmLead, syncCrmProperties } from '@carbooking/server';
+import { crmEnabled, CrmUnavailable, ensureCrmProperties, fetchCrmLead, syncCrmDeals, syncCrmProperties } from '@carbooking/server';
 import type { FastifyInstance } from 'fastify';
 import { isAdmin, me } from '../lib/auth';
 
@@ -56,8 +56,26 @@ export async function crmRoutes(app: FastifyInstance) {
     });
   });
 
+  /** Signed deals as closures. The portfolio goes first, so a listing added today can match. */
+  app.post('/admin/crm/sync-deals', admin, async (req) => {
+    if (!crmEnabled()) throw notFound('The CRM link');
+    const actorId = me(req).id;
+    return syncCrmProperties(actorId)
+      .then(() => syncCrmDeals(actorId))
+      .catch((err) => {
+        throw unavailable(err);
+      });
+  });
+
   app.get('/admin/crm/last-sync', admin, async () => {
-    const last = await prisma.auditLog.findFirst({ where: { action: 'CRM_PROPERTIES_SYNCED' }, orderBy: { at: 'desc' } });
-    return { enabled: crmEnabled(), at: last?.at ?? null, summary: last?.after ?? null };
+    const [last, deals] = await Promise.all(
+      ['CRM_PROPERTIES_SYNCED', 'CRM_DEALS_SYNCED'].map((action) => prisma.auditLog.findFirst({ where: { action }, orderBy: { at: 'desc' } })),
+    );
+    return {
+      enabled: crmEnabled(),
+      at: last?.at ?? null,
+      summary: last?.after ?? null,
+      deals: { at: deals?.at ?? null, summary: deals?.after ?? null },
+    };
   });
 }

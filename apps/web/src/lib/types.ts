@@ -423,7 +423,8 @@ export interface ClosureImportBatch {
   matchedCount: number;
   unmatchedCount: number;
   duplicateCount: number;
-  uploadedBy?: { name: string };
+  /** Null for the nightly CRM deals sync. */
+  uploadedBy?: { name: string } | null;
 }
 
 export interface ClosureImportRow {
