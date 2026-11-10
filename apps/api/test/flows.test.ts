@@ -280,6 +280,44 @@ describe('trips & tracking', () => {
     expect(await prisma.auditLog.count({ where: { action: 'VIEW_LOCATION', entityId: tripId } })).toBe(1);
   });
 
+  it('a trip the phone never tracked has no GPS distance, not a 100% odometer mismatch', async () => {
+    const b = await approvedBookingStartedAgo(20);
+    const { body } = await startTrip(b.id, 10_000, new Date(Date.now() - 15 * MIN));
+    const tripId = body.trip.id;
+    const closed = await admin.post(`/trips/${tripId}/admin-close`, { odometer: 10_006, note: 'Reading from the driver' });
+    expect(closed.status).toBe(200);
+
+    expect((await prisma.trip.findUniqueOrThrow({ where: { id: tripId } })).gpsDistanceKm).toBeNull();
+    expect((await admin.get(`/trips/${tripId}`)).body).toMatchObject({ tripKm: 6, gpsDistanceKm: null, variancePct: null, pathSource: null });
+    expect((await admin.get('/admin/trips')).body.find((r: { id: string }) => r.id === tripId)).toMatchObject({ variancePct: null, varianceFlag: false, trackerPending: false });
+    expect(await prisma.notification.count({ where: { type: 'TRACKER_UPLOAD_DUE' } })).toBe(0);
+  });
+
+  it("a trip in a car with a tracker reminds the admins to upload the tracker's history", async () => {
+    await prisma.car.update({ where: { id: s.car1.id }, data: { trackerDeviceId: '13000007729' } });
+    const b = await approvedBookingStartedAgo(20);
+    const { body } = await startTrip(b.id, 10_000, new Date(Date.now() - 15 * MIN));
+    const tripId = body.trip.id;
+    expect((await admin.get('/admin/trips')).body.find((r: { id: string }) => r.id === tripId).trackerPending).toBe(false);
+
+    await admin.post(`/trips/${tripId}/admin-close`, { odometer: 10_006, note: 'Reading from the driver' });
+    const reminders = await prisma.notification.findMany({ where: { type: 'TRACKER_UPLOAD_DUE', channel: 'IN_APP' } });
+    expect(reminders.map((n) => n.userId).sort()).toEqual([s.admin.id, s.admin2.id].sort());
+    expect(reminders[0]).toMatchObject({ title: "Upload KDA 001A's tracker history", link: `/admin/trips/${tripId}` });
+    expect((await admin.get('/admin/trips')).body.find((r: { id: string }) => r.id === tripId).trackerPending).toBe(true);
+    expect((await admin.get(`/trips/${tripId}`)).body.carTrackerId).toBe('13000007729');
+  });
+
+  it("a car with a tracker: the phone going quiet is noted in the app, not sent by SMS or WhatsApp", async () => {
+    await prisma.car.update({ where: { id: s.car1.id }, data: { trackerDeviceId: '13000007729' } });
+    const b = await approvedBookingStartedAgo(20);
+    const { body } = await startTrip(b.id, 10_000, new Date(Date.now() - 15 * MIN));
+    await refreshTrackingStatus(body.trip.id, new Date(Date.now() + 31 * MIN));
+    expect((await prisma.trip.findUniqueOrThrow({ where: { id: body.trip.id } })).trackingStatus).toBe('TRACKING_LOST');
+    const sent = await prisma.notification.findMany({ where: { type: { in: ['TRACKING_LOST', 'TRACKING_LOST_URGENT'] } } });
+    expect(sent.map((n) => `${n.type}/${n.channel}`)).toEqual(['TRACKING_LOST/IN_APP', 'TRACKING_LOST/IN_APP']);
+  });
+
   it('#8 overdue: owner pushed first, then admins by push and SMS', async () => {
     const b = await approvedBookingStartedAgo(100, 60);
     const { body } = await startTrip(b.id, 10_000, new Date(Date.now() - 95 * MIN));

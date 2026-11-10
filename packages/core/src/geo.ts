@@ -57,6 +57,16 @@ export function pathDistanceKm(points: Fix[], opts: PathOptions = {}): number {
 }
 
 /**
+ * A trip's GPS distance in km (to 10 m), or null when fewer than two usable
+ * fixes were recorded. "No GPS" is not "0 km", so it mustn't be compared with
+ * the odometer.
+ */
+export function recordedDistanceKm(points: Fix[], opts: PathOptions = {}): number | null {
+  if (cleanFixes(points, opts).length < 2) return null;
+  return Math.round(pathDistanceKm(points, opts) * 100) / 100;
+}
+
+/**
  * Whether a fix is inside a circular zone, allowing for the fix's reported
  * accuracy. The allowance is capped at the zone radius so a poor fix can't
  * stretch a 20 m zone to 100 m.

@@ -1,5 +1,5 @@
 import { compareTrack, decodePolyline, type LatLng, type TrackingEventType } from '@carbooking/core';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlarmClock,
   ArrowLeft,
@@ -8,10 +8,12 @@ import {
   CircleCheck,
   Clock,
   ExternalLink,
+  FileSpreadsheet,
   Flag,
   Gauge,
   ImageOff,
   LocateFixed,
+  LocateOff,
   LogOut,
   MapPinPen,
   MapPinPlus,
@@ -25,14 +27,15 @@ import {
   Radar,
   ShieldAlert,
   Signal,
-  SignalZero,
   TriangleAlert,
+  Upload,
   Wifi,
   WifiOff,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
+import { toast } from 'sonner';
 import { Page } from '@/components/Shell';
 import { CloseTripDialog } from '@/components/ops/CloseTripDialog';
 import { ContactButtons } from '@/components/ops/ContactButtons';
@@ -45,7 +48,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { Dialog } from '@/components/ui/dialog';
 import { Segmented } from '@/components/ui/form';
 import { Dl, EmptyState, ErrorState, PageHeader, Skeleton } from '@/components/ui/misc';
-import { get } from '@/lib/api';
+import { errorMessage, get, postFile } from '@/lib/api';
 import { useFormat } from '@/lib/format';
 import { useReference } from '@/lib/queries';
 import type { LocationPoint, Stop, TrackingEvent, TripDetail } from '@/lib/types';
@@ -593,8 +596,8 @@ const EVENT_ICON: Record<TrackingEventType, LucideIcon> = {
   ONLINE: Wifi,
   AIRPLANE_MODE_ON: Plane,
   AIRPLANE_MODE_OFF: PlaneLanding,
-  HEARTBEAT_MISSED: SignalZero,
-  TRACKING_LOST: SignalZero,
+  HEARTBEAT_MISSED: LocateOff,
+  TRACKING_LOST: LocateOff,
   TRACKING_RESUMED: Signal,
   GEOFENCE_ENTER: Radar,
   GEOFENCE_EXIT: Radar,
@@ -620,6 +623,12 @@ const TONE_BUBBLE: Record<Tone, string> = {
 };
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+
+/** A silence event is dated from the last contact; this is when the server noticed it. */
+function flaggedAt(e: TrackingEvent, fmt: Fmt): string | undefined {
+  if (e.source !== 'SERVER' || Date.parse(e.receivedAt) - Date.parse(e.occurredAt) < 60_000) return undefined;
+  return `Flagged at ${fmt.time(e.receivedAt)}`;
+}
 const numv = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 function describeEvent(e: TrackingEvent, t: TripDetail, fmt: Fmt, stopNo: (d: Record<string, unknown>) => { n: number | null; name: string | null }): { text: string; tone: Tone; sub?: string } {
@@ -647,7 +656,9 @@ function describeEvent(e: TrackingEvent, t: TripDetail, fmt: Fmt, stopNo: (d: Re
       if (d.always === true) return { text: 'Location permission set back to “Always”', tone: 'success' };
       return { text: 'Location permission changed', tone: 'warning', sub: str(d.status) ?? undefined };
     case 'OFFLINE':
-      return { text: e.source === 'DEVICE' ? 'Phone lost its connection' : `No contact from the phone${near}`, tone: 'warning' };
+      return e.source === 'DEVICE'
+        ? { text: 'Phone lost its connection', tone: 'warning' }
+        : { text: `No contact from the phone after this${near}`, tone: 'warning', sub: flaggedAt(e, fmt) };
     case 'ONLINE':
       return { text: 'Phone back online', tone: 'success' };
     case 'AIRPLANE_MODE_ON':
@@ -660,8 +671,11 @@ function describeEvent(e: TrackingEvent, t: TripDetail, fmt: Fmt, stopNo: (d: Re
       const seen = str(d.lastSeenAt);
       const battery = numv(d.battery);
       return {
-        text: `Tracking lost${seen ? `, last seen ${fmt.time(seen)}` : ''}${address ? ` at ${address}` : ''}${battery != null ? `, battery ${battery}%` : ''}`,
+        text: seen
+          ? `Tracking lost, last seen ${fmt.time(seen)}${address ? ` at ${address}` : ''}${battery != null ? `, battery ${battery}%` : ''}`
+          : 'Tracking lost: the phone never sent a location',
         tone: 'lost',
+        sub: flaggedAt(e, fmt),
       };
     }
     case 'TRACKING_RESUMED':
@@ -786,6 +800,7 @@ function SummaryCards({ t, now }: { t: TripDetail; now: number }) {
 
   return (
     <>
+      {t.carTrackerId && t.endedAt && <TrackerUploadCard t={t} />}
       <Card>
         <CardHeader title={running ? 'Current location' : 'Final known location'} actions={<TrackingBadge status={t.trackingStatus} />} />
         <CardBody className="space-y-3 text-sm">
@@ -841,6 +856,13 @@ function SummaryCards({ t, now }: { t: TripDetail; now: number }) {
               Odometer and GPS distance differ by {t.variancePct!.toFixed(0)}%, more than the {t.varianceThresholdPct}% threshold. Check the odometer photos.
             </Callout>
           )}
+          {t.endedAt && t.gpsDistanceKm == null && (
+            <Callout tone="warning">
+              {t.carTrackerId
+                ? "No GPS recorded yet. Upload the car's tracker history above to fill in the route, stop visits and distance."
+                : "No GPS was recorded on this trip, so its route, stop visits and distance can't be checked."}
+            </Callout>
+          )}
           {t.unloggedKm > 0 && (
             <Callout tone="warning">
               {t.unloggedKm.toLocaleString()} km were driven between the car's last recorded reading and this trip's start, with no trip logged.
@@ -886,6 +908,59 @@ function SummaryCards({ t, now }: { t: TripDetail; now: number }) {
         </CardBody>
       </Card>
     </>
+  );
+}
+
+/**
+ * The car's tracker is the record of where it went. Oversee only gives its
+ * history as an export, so the admin uploads it here once the trip is over.
+ */
+function TrackerUploadCard({ t }: { t: TripDetail }) {
+  const fmt = useFormat();
+  const qc = useQueryClient();
+  const input = useRef<HTMLInputElement>(null);
+  const car = t.booking.car;
+  const done = t.pathSource === 'TRACKER';
+  const upload = useMutation({
+    mutationFn: (file: File) => postFile<{ trips: { tripId: string; added: number }[] }>(`/admin/cars/${car.id}/tracker-history`, file),
+    onSuccess: (summary) => {
+      const mine = summary.trips.find((x) => x.tripId === t.id);
+      if (!mine) toast.warning(`That file has nothing between ${fmt.time(t.startedAt)} and ${fmt.time(t.endedAt!)}. Check it's ${car.registration} on ${fmt.date(t.startedAt)}.`);
+      else if (mine.added === 0) toast.info('Already uploaded: nothing new in that file for this trip.');
+      else toast.success(`Added ${mine.added.toLocaleString()} positions from the tracker`);
+      void qc.invalidateQueries({ queryKey: ['trip'] });
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+    onSettled: () => {
+      if (input.current) input.current.value = '';
+    },
+  });
+
+  return (
+    <Card className={cn(!done && 'border-warning/40')}>
+      <CardHeader title="Car tracker" actions={done ? <Badge tone="success">Uploaded</Badge> : <Badge tone="warning">Not uploaded</Badge>} />
+      <CardBody className="space-y-3 text-sm">
+        <p className="text-muted-fg">
+          {done
+            ? `The route, distance and stop visits come from ${car.registration}'s tracker (${t.points.length.toLocaleString()} positions).`
+            : `On Oversee, open Reports and Charts → Location History Records Report, pick ${car.registration} and ${fmt.date(t.startedAt)}, export it, and upload the file here.`}
+        </p>
+        <input
+          ref={input}
+          type="file"
+          accept=".xls,.html,.htm"
+          className="sr-only"
+          aria-label={`Tracker history export for ${car.registration}`}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) upload.mutate(file);
+          }}
+        />
+        <Button variant={done ? 'secondary' : 'primary'} size="sm" loading={upload.isPending} onClick={() => input.current?.click()}>
+          {!upload.isPending && (done ? <FileSpreadsheet /> : <Upload />)} {done ? 'Upload again' : 'Upload export'}
+        </Button>
+      </CardBody>
+    </Card>
   );
 }
 

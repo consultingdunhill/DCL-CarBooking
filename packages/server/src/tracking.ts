@@ -20,7 +20,7 @@ const tripInclude = {
   booking: {
     include: {
       owner: { select: { id: true, name: true } },
-      car: { select: { id: true, registration: true, homeOffice: true } },
+      car: { select: { id: true, registration: true, homeOffice: true, trackerDeviceId: true } },
       stops: { where: { status: { in: ['PLANNED', 'ARRIVED', 'DEPARTED'] } }, orderBy: { seq: 'asc' } },
     },
   },
@@ -100,23 +100,28 @@ async function applyStatus(trip: TripWithBooking, next: { status: TrackingStatus
   const tz = s.timezone;
   const near = lastAddress ? ` near ${lastAddress}` : '';
   const link = `/admin/trips/${trip.id}`;
+  // A car with its own tracker has its route recorded whatever the phone does,
+  // and phones running the web app go quiet whenever the screen locks: tell
+  // admins in the app only, rather than by SMS and WhatsApp.
+  const tracked = Boolean(trip.booking.car.trackerDeviceId);
+  const trackerNote = tracked ? " The car's tracker still records the route; upload its history after the trip." : '';
   if (next.status === 'TRACKING_LOST') {
     await notify({
       to: { admins: true },
-      type: 'TRACKING_LOST_URGENT',
+      type: tracked ? 'TRACKING_LOST' : 'TRACKING_LOST_URGENT',
       title: `Tracking lost: ${who(trip)}`,
-      body: `Last seen ${fmtTime(trip.lastSeenAt ?? next.since, tz)}${near}${trip.lastBattery != null ? `, battery ${trip.lastBattery}%` : ''}.`,
+      body: `Last seen ${fmtTime(trip.lastSeenAt ?? next.since, tz)}${near}${trip.lastBattery != null ? `, battery ${trip.lastBattery}%` : ''}.${trackerNote}`,
       link,
-      urgent: true,
+      ...(tracked ? { channels: ['IN_APP'] } : { urgent: true }),
     });
   } else if (next.status === 'LOCATION_OFF') {
     await notify({
       to: { admins: true },
       type: 'LOCATION_OFF',
       title: `Location turned off: ${who(trip)}`,
-      body: `Location OFF at ${fmtTime(next.since, tz)}${near}.`,
+      body: `Location OFF at ${fmtTime(next.since, tz)}${near}.${trackerNote}`,
       link,
-      channels: ['IN_APP', 'PUSH'],
+      channels: tracked ? ['IN_APP'] : ['IN_APP', 'PUSH'],
     });
   } else if (next.status === 'LIVE' && (prev === 'TRACKING_LOST' || prev === 'LOCATION_OFF')) {
     await notify({
@@ -259,10 +264,15 @@ async function checkLowBattery(trip: TripWithBooking, s: Settings) {
   });
 }
 
-/** Arrival/departure at each stop and arrival back at the office, from the GPS track. */
-async function detectZones(trip: TripWithBooking, s: Settings) {
+/**
+ * Arrival/departure at each stop and arrival back at the office, from the GPS
+ * track (the car's tracker when it has one, as for the path). `live` is false
+ * for a track filled in after the trip, which mustn't prompt anyone to end it.
+ */
+async function detectZones(trip: TripWithBooking, s: Settings, { live = true } = {}) {
+  const pathSource = await tripPathSource(trip.id);
   const fixes = await prisma.locationPoint.findMany({
-    where: { tripId: trip.id },
+    where: { tripId: trip.id, ...(pathSource === 'TRACKER' ? { source: 'TRACKER' } : {}) },
     orderBy: { recordedAt: 'asc' },
     select: { lat: true, lng: true, recordedAt: true, accuracy: true },
   });
@@ -298,6 +308,7 @@ async function detectZones(trip: TripWithBooking, s: Settings) {
     if (!visit) return;
     await prisma.trip.update({ where: { id: trip.id }, data: { officeArrivedAt: visit.arrivedAt } });
     await prisma.trackingEvent.create({ data: { tripId: trip.id, type: 'OFFICE_ARRIVED', occurredAt: visit.arrivedAt, source: 'SERVER', lat: o.lat, lng: o.lng } });
+    if (!live) return;
     await notify({
       to: { userIds: [trip.booking.ownerId] },
       type: 'END_TRIP_PROMPT',
@@ -307,6 +318,17 @@ async function detectZones(trip: TripWithBooking, s: Settings) {
       channels: ['IN_APP', 'PUSH'],
     });
   }
+}
+
+/**
+ * Stop visits and the return to the office for a trip whose track arrived
+ * after it ended (an uploaded tracker export), so a trip the phone failed to
+ * track still shows where the car went.
+ */
+export async function detectZonesAfterTrip(tripId: string) {
+  const trip = await loadTrip(tripId);
+  if (!trip || trip.booking.status === 'IN_PROGRESS') return;
+  await detectZones(trip, await getSettings(), { live: false });
 }
 
 // ── Device events ─────────────────────────────────────────────────────────────

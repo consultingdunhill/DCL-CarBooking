@@ -296,6 +296,8 @@ export interface TripDetail extends TripSummary {
   /** Where the path comes from: the car's tracker when it reported, else the phone. Admins only. */
   pathSource?: 'TRACKER' | 'PHONE' | null;
   points: LocationPoint[];
+  /** The car's GPS tracker, if it has one. Admins only. */
+  carTrackerId?: string | null;
 }
 
 export interface AdminTripRow extends TripSummary {
@@ -304,6 +306,8 @@ export interface AdminTripRow extends TripSummary {
   variancePct: number | null;
   varianceFlag: boolean;
   issues: number;
+  /** Ended in a car with a tracker whose history hasn't been uploaded yet. */
+  trackerPending: boolean;
   booking: {
     id: string;
     status: BookingStatus;

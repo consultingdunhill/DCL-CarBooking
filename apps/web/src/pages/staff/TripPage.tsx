@@ -36,7 +36,7 @@ import { Field, Input, Textarea } from '@/components/ui/form';
 import { Dl, ErrorState, PageLoader } from '@/components/ui/misc';
 import { ApiError, errorMessage, post, uploadFile } from '@/lib/api';
 import { useMe } from '@/lib/auth';
-import { canRunTrips, isNative, platform } from '@/lib/env';
+import { canRunTrips, isIOS, isNative, platform } from '@/lib/env';
 import { useFormat } from '@/lib/format';
 import { enqueue } from '@/lib/offline-queue';
 import { useBooking, useReference } from '@/lib/queries';
@@ -81,6 +81,29 @@ function PermissionStep({ perm, onRequest }: { perm: LocationPermission | null; 
   );
 }
 
+/**
+ * The web app can only track while it's on screen; say so plainly. `awake`:
+ * Fleet is holding the screen on; otherwise say how to stop it locking.
+ */
+function KeepOpenNote({ awake = false }: { awake?: boolean }) {
+  const screen = awake
+    ? 'Fleet is keeping the screen on.'
+    : isIOS
+      ? 'Set Auto-Lock to Never for the trip (Settings › Display & Brightness › Auto-Lock) and keep Low Power Mode off, which locks the screen after 30 seconds.'
+      : 'Set the screen timeout to its longest for the trip.';
+  return (
+    <div className="flex gap-2 rounded-xl border border-warning/40 bg-warning-bg/60 p-3 text-sm">
+      <Smartphone className="mt-0.5 size-4 shrink-0 text-warning" />
+      <p>
+        <span className="font-medium">Keep Fleet open on this screen until you're back.</span>{' '}
+        <span className="text-muted-fg">
+          The trip is only tracked while Fleet is showing: locking the phone or switching to another app pauses it. {screen} A phone holder and a charger help.
+        </span>
+      </p>
+    </div>
+  );
+}
+
 function StartDialog({ booking, open, onOpenChange }: { booking: Booking; open: boolean; onOpenChange: (o: boolean) => void }) {
   const ref = useReference();
   const qc = useQueryClient();
@@ -103,10 +126,12 @@ function StartDialog({ booking, open, onOpenChange }: { booking: Booking; open: 
     if (!photo) e.photo = 'Take a photo of the dashboard';
     setErrors(e);
     if (Object.keys(e).length) return;
-    if (perm !== 'always' && isNative) {
+    if (perm !== 'always') {
       const p = await requestLocationPermission();
       setPerm(p);
-      if (p === 'denied') return toast.error('Location is needed to run the trip.');
+      if (p === 'denied') {
+        return toast.error(isNative ? 'Location is needed to run the trip.' : "Location is blocked for Fleet. Allow it in the browser's site settings, then start the trip again.");
+      }
     }
 
     const action = { kind: 'trip.start' as const, bookingId: booking.id, odometer: reading, photo: photo!, clientRequestId: uid(), startedAt: new Date().toISOString() };
@@ -154,7 +179,7 @@ function StartDialog({ booking, open, onOpenChange }: { booking: Booking; open: 
           {(p) => <Input {...p} inputMode="numeric" pattern="[0-9]*" className="h-12 text-lg tabular" value={odometer} onChange={(e) => setOdometer(e.target.value.replace(/[^0-9]/g, ''))} placeholder="e.g. 84250" />}
         </Field>
         <PhotoCapture value={photo} onChange={setPhoto} error={errors.photo} />
-        {isNative && <PermissionStep perm={perm} onRequest={async () => setPerm(await requestLocationPermission())} />}
+        {isNative ? <PermissionStep perm={perm} onRequest={async () => setPerm(await requestLocationPermission())} /> : <KeepOpenNote />}
         <p className="text-xs text-muted-fg">Location is recorded only until you end this trip.</p>
       </div>
     </Dialog>
@@ -428,6 +453,14 @@ export function TripPage() {
   const eta = trip?.etaAt ?? b.expectedReturnAt;
   const overdue = running && now > new Date(eta).getTime() + (settings?.overdueGraceMin ?? 15) * MINUTE;
   const myJoin = b.joinRequests.find((j) => j.requester.id === me.id);
+  // "On" only once the phone has a position: a tracker that has started but has no fix isn't tracking anything.
+  const [trackingLabel, trackingTone] = !tracker.active
+    ? ['Starting…', 'wait']
+    : tracker.gpsError
+      ? ['Check location', 'bad']
+      : !tracker.lastFix
+        ? ['Finding GPS…', 'wait']
+        : ['On', 'ok'];
   const stops = activeStops(b);
 
   // ── Main action card ──
@@ -491,12 +524,12 @@ export function TripPage() {
             <p className="text-xs text-muted-fg">Tracking</p>
             {canRunTrips ? (
               <>
-                <p className={cn('flex items-center gap-1.5 font-semibold', tracker.active ? 'text-success' : 'text-warning')}>
-                  <span className={cn('size-2 rounded-full', tracker.active ? 'bg-success' : 'bg-warning')} />
-                  {tracker.active ? 'On' : 'Starting…'}
+                <p className={cn('flex items-center gap-1.5 font-semibold', trackingTone === 'ok' ? 'text-success' : trackingTone === 'bad' ? 'text-danger' : 'text-warning')}>
+                  <span className={cn('size-2 rounded-full', trackingTone === 'ok' ? 'bg-success' : trackingTone === 'bad' ? 'bg-danger' : 'bg-warning')} />
+                  {trackingLabel}
                 </p>
                 <p className="text-xs text-muted-fg">
-                  {tracker.lastSyncAt ? `Synced ${fmt.relative(tracker.lastSyncAt)}` : 'Not synced yet'}
+                  {tracker.gpsError ?? (tracker.lastSyncAt ? `Synced ${fmt.relative(tracker.lastSyncAt)}` : 'Not synced yet')}
                   {tracker.pendingEvents > 0 && ` · ${tracker.pendingEvents} to send`}
                 </p>
               </>
@@ -505,6 +538,7 @@ export function TripPage() {
             )}
           </div>
         </div>
+        {canRunTrips && !isNative && <KeepOpenNote awake={tracker.screenAwake} />}
         {!navigator.onLine && (
           <p className="flex items-center gap-2 text-xs text-warning">
             <WifiOff className="size-4" /> Offline. The route is saved on the phone and uploads when you're back online.

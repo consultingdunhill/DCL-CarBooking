@@ -1,7 +1,7 @@
-import { pathDistanceKm, type TrackerFix } from '@carbooking/core';
+import { recordedDistanceKm, type TrackerFix } from '@carbooking/core';
 import { prisma } from '@carbooking/db';
 import { getSettings } from './settings';
-import { ingestLocations } from './tracking';
+import { detectZonesAfterTrip, ingestLocations } from './tracking';
 import { trackerToDeviceLocation } from './trackers';
 
 const MINUTE = 60_000;
@@ -28,7 +28,8 @@ export interface TrackerImportResult {
  * time, tagged as TRACKER. The tracker reports around the clock; only fixes
  * inside a trip are kept. Each fix's uuid comes from the car and its time, so
  * uploading the same file again adds nothing. An ended trip's GPS distance is
- * recomputed from the tracker path, which then drives the odometer check.
+ * recomputed from the tracker path, which then drives the odometer check, and
+ * its stop visits and return to the office are found on that path.
  */
 export async function importTrackerHistory(car: { id: string; trackerDeviceId: string | null }, fixes: TrackerFix[], now = new Date()): Promise<TrackerImportResult> {
   if (fixes.length === 0) return { from: null, to: null, trips: [], outsideTrips: 0 };
@@ -75,9 +76,10 @@ export async function importTrackerHistory(car: { id: string; trackerDeviceId: s
     if (added > 0 && t.endedAt) {
       const s = await getSettings();
       const path = await prisma.locationPoint.findMany({ where: { tripId: t.id, source: 'TRACKER' }, select: { lat: true, lng: true, recordedAt: true, accuracy: true } });
-      const gpsKm = pathDistanceKm(path, { maxAccuracyM: s.maxFixAccuracyM });
-      await prisma.trip.update({ where: { id: t.id }, data: { gpsDistanceKm: Math.round(gpsKm * 100) / 100 } });
+      await prisma.trip.update({ where: { id: t.id }, data: { gpsDistanceKm: recordedDistanceKm(path, { maxAccuracyM: s.maxFixAccuracyM }) } });
     }
+    // A running trip already checks its stops as fixes arrive; an ended one gets them now.
+    if (added > 0) await detectZonesAfterTrip(t.id);
     out.push({ tripId: t.id, bookingId: t.bookingId, startedAt: t.startedAt, endedAt: t.endedAt, owner: t.booking.owner.name, added });
   }
   return { from, to, trips: out, outsideTrips: fixes.length - used.size };

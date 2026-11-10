@@ -23,7 +23,7 @@ const STATUS_OPTIONS = [
   { value: 'COMPLETED', label: 'Completed' },
 ];
 
-const hasIssue = (r: AdminTripRow) => r.issues > 0 || r.varianceFlag || r.unloggedKm > 0 || r.booking.status === 'AWAITING_ODOMETER';
+const hasIssue = (r: AdminTripRow) => r.issues > 0 || r.varianceFlag || r.unloggedKm > 0 || r.trackerPending || r.booking.status === 'AWAITING_ODOMETER';
 
 /** Trip history for admins: odometer vs GPS, interruptions, how each trip ended. */
 export function TripsPage() {
@@ -170,6 +170,7 @@ export function TripsPage() {
                     <VarianceBadge r={r} />
                     {r.unloggedKm > 0 && <span className="text-warning">+{r.unloggedKm} km unlogged</span>}
                     {r.issues > 0 && <Badge tone="danger">{r.issues} interruption{r.issues > 1 ? 's' : ''}</Badge>}
+                    {r.trackerPending && <Badge tone="warning">Tracker not uploaded</Badge>}
                     {r.endMethod && <span>{END_METHOD_LABELS[r.endMethod]}</span>}
                   </div>
                 </Link>
@@ -220,7 +221,10 @@ export function TripsPage() {
                       {fmt.km(r.tripKm)}
                       {r.unloggedKm > 0 && <div className="text-xs text-warning">+{r.unloggedKm} unlogged</div>}
                     </Td>
-                    <Td className="tabular text-right whitespace-nowrap">{fmt.km(r.gpsDistanceKm)}</Td>
+                    <Td className="tabular text-right whitespace-nowrap">
+                      {fmt.km(r.gpsDistanceKm)}
+                      {r.trackerPending && <div className="text-xs text-warning">Tracker not uploaded</div>}
+                    </Td>
                     <Td className="text-right whitespace-nowrap">
                       <VarianceBadge r={r} />
                     </Td>
