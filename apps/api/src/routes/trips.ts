@@ -11,7 +11,7 @@ import {
   LocationBatchSchema,
   notFound,
   odometerVariancePct,
-  pathDistanceKm,
+  recordedDistanceKm,
   shortName,
   StartTripSchema,
   StopActionSchema,
@@ -300,7 +300,8 @@ export async function tripRoutes(app: FastifyInstance) {
       where: { tripId, ...(pathSource === 'TRACKER' ? { source: 'TRACKER' } : {}) },
       select: { lat: true, lng: true, recordedAt: true, accuracy: true },
     });
-    const gpsKm = pathDistanceKm(points, { maxAccuracyM: s.maxFixAccuracyM });
+    // Null when the phone (and tracker) recorded nothing usable: no GPS isn't 0 km.
+    const gpsKm = recordedDistanceKm(points, { maxAccuracyM: s.maxFixAccuracyM });
     // If it went to AWAITING_ODOMETER, the trip really ended when the car got back.
     const endedAt = trip.officeArrivedAt && trip.booking.status === 'AWAITING_ODOMETER' ? trip.officeArrivedAt : opts.endedAt;
 
@@ -319,7 +320,7 @@ export async function tripRoutes(app: FastifyInstance) {
           endMethod: opts.method,
           endNote: opts.note,
           endRequestId: opts.requestId,
-          gpsDistanceKm: Math.round(gpsKm * 100) / 100,
+          gpsDistanceKm: gpsKm,
           trackingStatus: 'STOPPED',
           trackingStatusSince: endedAt,
           locationOffSince: null,
@@ -338,9 +339,21 @@ export async function tripRoutes(app: FastifyInstance) {
         to: { admins: true },
         type: 'ODOMETER_VARIANCE',
         title: `Odometer vs GPS differ on ${trip.booking.car.registration}`,
-        body: `Odometer ${tripKm} km, GPS ${gpsKm.toFixed(1)} km (${Math.round(variance)}% apart).`,
+        body: `Odometer ${tripKm} km, GPS ${gpsKm!.toFixed(1)} km (${Math.round(variance)}% apart).`,
         link: `/admin/trips/${tripId}`,
         channels: ['IN_APP'],
+      });
+    }
+    // The car's tracker is the record of where it went, but Oversee only gives it up as an export.
+    if (trip.booking.car.trackerDeviceId && pathSource !== 'TRACKER') {
+      const owner = await prisma.user.findUnique({ where: { id: trip.booking.ownerId }, select: { name: true } });
+      await notify({
+        to: { admins: true },
+        type: 'TRACKER_UPLOAD_DUE',
+        title: `Upload ${trip.booking.car.registration}'s tracker history`,
+        body: `${owner ? `${shortName(owner.name)}'s trip` : 'A trip'} (${fmtTime(trip.startedAt, s.timezone)}–${fmtTime(endedAt, s.timezone)}) has ended. Export that day's Location History Records Report from Oversee and upload it on the trip page to record the route and stops.`,
+        link: `/admin/trips/${tripId}`,
+        channels: ['IN_APP', 'PUSH'],
       });
     }
     await publishLive({ type: 'booking.changed', bookingId: trip.bookingId, status: 'COMPLETED' });
@@ -449,7 +462,8 @@ export async function tripRoutes(app: FastifyInstance) {
       select: pointSelect,
     });
     await auditView({ actorId: user.id, action: 'VIEW_LOCATION', entity: 'Trip', entityId: trip.id, ip: ipOf(req) });
-    return { ...base, pathSource, points };
+    const car = await prisma.car.findUnique({ where: { id: trip.booking.carId }, select: { trackerDeviceId: true } });
+    return { ...base, pathSource, points, carTrackerId: car?.trackerDeviceId ?? null };
   });
 
   app.get<{ Querystring: { from?: string; to?: string; carId?: string; status?: string } }>('/admin/trips', { config: { auth: 'admin' } }, async (req) => {
@@ -471,18 +485,22 @@ export async function tripRoutes(app: FastifyInstance) {
             startAt: true,
             expectedReturnAt: true,
             owner: { select: { id: true, name: true } },
-            car: { select: { id: true, registration: true } },
+            car: { select: { id: true, registration: true, trackerDeviceId: true } },
             stops: { where: { status: { in: ['PLANNED', 'ARRIVED', 'DEPARTED', 'SKIPPED'] } }, select: { id: true, address: true, label: true }, orderBy: { seq: 'asc' } },
           },
         },
-        _count: { select: { events: { where: { type: { in: ['LOCATION_OFF', 'TRACKING_LOST', 'OVERDUE'] } } } } },
+        _count: { select: { events: { where: { type: { in: ['LOCATION_OFF', 'TRACKING_LOST', 'OVERDUE'] } } }, points: { where: { source: 'TRACKER' } } } },
       },
     });
     const s = await getSettings();
+    // Older trips have had their GPS removed by retention; don't ask for theirs.
+    const retained = new Date();
+    retained.setUTCMonth(retained.getUTCMonth() - s.gpsRetentionMonths);
     return trips.map((t) => {
       const tripKm = t.odometerEnd != null ? t.odometerEnd - t.odometerStart : null;
       const variancePct = odometerVariancePct(tripKm, t.gpsDistanceKm);
-      return { ...t, tripKm, variancePct, varianceFlag: variancePct != null && variancePct > s.odometerVarianceThresholdPct, issues: t._count.events };
+      const trackerPending = Boolean(t.booking.car.trackerDeviceId && t.endedAt && t.endedAt > retained && t._count.points === 0);
+      return { ...t, tripKm, variancePct, varianceFlag: variancePct != null && variancePct > s.odometerVarianceThresholdPct, issues: t._count.events, trackerPending };
     });
   });
 

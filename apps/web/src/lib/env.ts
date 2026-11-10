@@ -22,3 +22,5 @@ export const isNative = Capacitor.isNativePlatform();
 export const platform = Capacitor.getPlatform() as 'web' | 'ios' | 'android';
 /** Trips run on the native app; a desktop browser may run them only in development. */
 export const canRunTrips = isNative || ENV.allowWebTrips;
+/** An iPhone or iPad, as the app, in Safari or added to the home screen (iPadOS reports itself as a Mac). */
+export const isIOS = platform === 'ios' || /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1);

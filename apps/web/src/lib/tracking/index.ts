@@ -47,8 +47,12 @@ interface TrackerState {
   lastFix: Fix | null;
   lastSyncAt: string | null;
   pendingEvents: number;
+  /** Why the phone has no position right now (web), e.g. location blocked. */
+  gpsError: string | null;
+  /** The web app is holding the screen awake so the browser keeps tracking. */
+  screenAwake: boolean;
 }
-let state: TrackerState = { active: false, lastFix: null, lastSyncAt: null, pendingEvents: 0 };
+let state: TrackerState = { active: false, lastFix: null, lastSyncAt: null, pendingEvents: 0, gpsError: null, screenAwake: false };
 const subs = new Set<(s: TrackerState) => void>();
 export function setTrackerState(patch: Partial<TrackerState>) {
   state = { ...state, ...patch };

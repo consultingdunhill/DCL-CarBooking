@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodePolyline, encodePolyline, haversineM, isWithinZone, pathDistanceKm, type Fix } from './geo';
+import { decodePolyline, encodePolyline, haversineM, isWithinZone, pathDistanceKm, recordedDistanceKm, type Fix } from './geo';
 import { detectOfficeArrival, detectStopVisits, findVisits } from './zones';
 
 const office = { lat: -1.2921, lng: 36.8219 };
@@ -16,6 +16,14 @@ describe('geo', () => {
   it('sums a track and drops impossible jumps and poor fixes', () => {
     const track = [fix(0, 0), fix(1, 500), fix(1.01, 50_000), fix(2, 1000), fix(3, 1500, 500)];
     expect(pathDistanceKm(track, { maxAccuracyM: 75 })).toBeCloseTo(1, 1);
+  });
+
+  it('gives no GPS distance, not 0 km, when fewer than two usable fixes were recorded', () => {
+    expect(recordedDistanceKm([])).toBeNull();
+    expect(recordedDistanceKm([fix(0, 0)])).toBeNull();
+    expect(recordedDistanceKm([fix(0, 0), fix(1, 500, 500)], { maxAccuracyM: 75 })).toBeNull();
+    expect(recordedDistanceKm([fix(0, 0), fix(5, 0)])).toBe(0);
+    expect(recordedDistanceKm([fix(0, 0), fix(1, 1234)])).toBeCloseTo(1.23, 2);
   });
 
   it('allows for fix accuracy, capped at the zone radius', () => {

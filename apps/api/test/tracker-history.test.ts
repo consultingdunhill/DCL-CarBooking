@@ -82,6 +82,47 @@ describe('tracker history upload', () => {
     expect(await prisma.auditLog.count({ where: { action: 'TRACKER_HISTORY_IMPORTED', entityId: s.car1.id } })).toBe(2);
   });
 
+  it('finds the stop visit and the return to the office on a trip the phone never tracked', async () => {
+    const startedAt = new Date(Math.floor((Date.now() - 3 * 3600_000) / 1000) * 1000);
+    const at = (m: number) => new Date(startedAt.getTime() + m * MIN);
+    const booking = await prisma.booking.create({
+      data: {
+        ownerId: s.jane.id,
+        driverId: s.driver.id,
+        carId: s.car1.id,
+        status: 'COMPLETED',
+        startAt: startedAt,
+        expectedReturnAt: at(60),
+        stops: { create: [{ seq: 1, address: 'Riverside Drive', ...north(3000), addedById: s.jane.id, reasonId: s.viewing.id }] },
+      },
+    });
+    const trip = await prisma.trip.create({
+      data: { bookingId: booking.id, startedAt, endedAt: at(60), endMethod: 'ADMIN', odometerStart: 10_000, odometerEnd: 10_006, photoStartKey: 'start.jpg', startRequestId: 'req-untracked', gpsDistanceKm: null },
+    });
+
+    // Out 3 km (10 min), parked at the stop (15 min), back (10 min), parked at the office.
+    const where = (m: number) => (m < 0 ? 0 : m < 10 ? 300 * m : m <= 25 ? 3000 : m <= 35 ? 3000 - 300 * (m - 25) : 0);
+    const rows = Array.from({ length: 66 }, (_, i) => ({ at: at(i - 5), pos: north(where(i - 5)) }));
+    expect((await upload(admin, s.car1.id, overseeExport(rows))).statusCode).toBe(200);
+
+    const stop = await prisma.bookingStop.findFirstOrThrow({ where: { bookingId: booking.id } });
+    expect(stop).toMatchObject({ status: 'DEPARTED', arrivedAt: at(10), departedAt: at(25) });
+    const after = await prisma.trip.findUniqueOrThrow({ where: { id: trip.id } });
+    expect(after.officeArrivedAt).toEqual(at(35));
+    expect(after.gpsDistanceKm).toBeCloseTo(6, 1);
+    const events = await prisma.trackingEvent.findMany({ where: { tripId: trip.id } });
+    expect(events.map((e) => e.type).sort()).toEqual(['OFFICE_ARRIVED', 'STOP_ARRIVED', 'STOP_DEPARTED']);
+    // Uploading again adds nothing and changes nothing.
+    expect((await upload(admin, s.car1.id, overseeExport(rows))).json().trips[0].added).toBe(0);
+    expect(await prisma.trackingEvent.count({ where: { tripId: trip.id } })).toBe(3);
+
+    // The trip is over: nobody is asked to end it.
+    expect(await prisma.notification.count({ where: { type: 'END_TRIP_PROMPT' } })).toBe(0);
+    // And it no longer waits for an upload.
+    await prisma.car.update({ where: { id: s.car1.id }, data: { trackerDeviceId: '13000007729' } });
+    expect((await admin.get('/admin/trips')).body.find((r: { id: string }) => r.id === trip.id).trackerPending).toBe(false);
+  });
+
   it("leaves other cars' trips alone and turns away the wrong report", async () => {
     const trip = await finishedTrip();
     const rows = [{ at: new Date(trip.startedAt.getTime() + 10 * MIN), pos: north(1000) }];
