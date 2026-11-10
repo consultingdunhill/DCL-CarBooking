@@ -79,7 +79,8 @@ export async function importTrackerHistory(car: { id: string; trackerDeviceId: s
       await prisma.trip.update({ where: { id: t.id }, data: { gpsDistanceKm: recordedDistanceKm(path, { maxAccuracyM: s.maxFixAccuracyM }) } });
     }
     // A running trip already checks its stops as fixes arrive; an ended one gets them now.
-    if (added > 0) await detectZonesAfterTrip(t.id);
+    // Even with nothing new, so uploading again re-checks after the stop radius is changed.
+    await detectZonesAfterTrip(t.id);
     out.push({ tripId: t.id, bookingId: t.bookingId, startedAt: t.startedAt, endedAt: t.endedAt, owner: t.booking.owner.name, added });
   }
   return { from, to, trips: out, outsideTrips: fixes.length - used.size };

@@ -112,6 +112,10 @@ describe('tracker history upload', () => {
     expect(after.gpsDistanceKm).toBeCloseTo(6, 1);
     const events = await prisma.trackingEvent.findMany({ where: { tripId: trip.id } });
     expect(events.map((e) => e.type).sort()).toEqual(['OFFICE_ARRIVED', 'STOP_ARRIVED', 'STOP_DEPARTED']);
+    // Uploading again adds nothing and changes nothing.
+    expect((await upload(admin, s.car1.id, overseeExport(rows))).json().trips[0].added).toBe(0);
+    expect(await prisma.trackingEvent.count({ where: { tripId: trip.id } })).toBe(3);
+
     // The trip is over: nobody is asked to end it.
     expect(await prisma.notification.count({ where: { type: 'END_TRIP_PROMPT' } })).toBe(0);
     // And it no longer waits for an upload.
