@@ -4,7 +4,7 @@
  *   pnpm erp:schema --out ../dunhill-erp/objects/fleet/doctypes   write the doctypes as JSON
  *   pnpm erp:sync [--dry-run] [--force] [--reconcile] [--only cars,bookings,fuel,car-months]
  *
- * In production: docker compose -f docker-compose.prod.yml exec worker node dist/erp-cli.js sync --dry-run
+ * In production: docker compose -f docker-compose.prod.yml exec worker node apps/worker/dist/erp-cli.js sync --dry-run
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

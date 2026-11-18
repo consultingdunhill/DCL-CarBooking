@@ -77,5 +77,5 @@ pnpm erp:sync                    # send what changed now
 pnpm erp:sync --reconcile        # repair drift, then a normal pass
 pnpm erp:sync --force --only bookings
 # on the server:
-docker compose -f docker-compose.prod.yml exec worker node dist/erp-cli.js sync --dry-run
+docker compose -f docker-compose.prod.yml exec worker node apps/worker/dist/erp-cli.js sync --dry-run
 ```
