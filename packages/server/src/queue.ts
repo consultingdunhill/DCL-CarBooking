@@ -11,6 +11,8 @@ export const QUEUES = {
   retention: 'gps.retention',
   crmSync: 'crm.sync',
   crmViewings: 'crm.push-viewings',
+  erpSync: 'erp.sync',
+  erpReconcile: 'erp.reconcile',
 } as const;
 
 let boss: PgBoss | null = null;

@@ -181,6 +181,23 @@ const TABS = [
  * Layout: a sidebar on desktop; on phones a bottom tab bar (staff) and a menu
  * button for the admin sections.
  */
+/** Admins only: a red bar when ERPNext's copy of Fleet isn't keeping up, like the CRM's. */
+function ErpSyncWarning() {
+  const { isAdmin } = useAuth();
+  const q = useQuery({
+    queryKey: ['erp-sync'],
+    queryFn: () => get<{ warning: string | null }>('/admin/erp-sync'),
+    enabled: isAdmin,
+    refetchInterval: 120_000,
+  });
+  if (!isAdmin || !q.data?.warning) return null;
+  return (
+    <p role="alert" className="border-b border-danger/40 bg-danger-bg px-4 py-2 text-sm text-danger lg:px-6">
+      {q.data.warning}
+    </p>
+  );
+}
+
 export function Shell() {
   const { isAdmin } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -241,6 +258,7 @@ export function Shell() {
         </header>
 
         {/* `isolate`: page z-indexes (the booking sheet over its map) stay below the menu and dialogs. */}
+        <ErpSyncWarning />
         <main key={location.pathname.split('/')[1]} className="isolate min-h-0 flex-1 overflow-y-auto">
           <Outlet />
         </main>

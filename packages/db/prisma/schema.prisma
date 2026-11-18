@@ -696,3 +696,23 @@ model Setting {
   updatedById String?  @db.Uuid
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 }
+
+/// What was last sent to ERPNext for one Fleet record, so unchanged records are skipped
+/// (packages/server/src/erp/sync.ts). ERPNext holds a read-only copy; Fleet stays the record.
+model ErpSyncState {
+  id          String    @id @default(uuid()) @db.Uuid
+  doctype     String
+  /// The Fleet id, or "<carId>:<YYYY-MM>" for a car's month.
+  fleetId     String
+  /// The ERPNext document name, e.g. "BK-1a2b3c4d".
+  erpName     String
+  /// sha256 of what was last sent; null forces a resend.
+  payloadHash String?
+  syncedAt    DateTime? @db.Timestamptz(3)
+  lastError   String?
+  failedAt    DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@unique([doctype, fleetId])
+}

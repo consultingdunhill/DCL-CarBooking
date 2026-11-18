@@ -14,3 +14,5 @@ export * from './tracker-import';
 export * from './monitor';
 export * from './whatsapp';
 export * from './crm';
+export * from './report-data';
+export * from './erp';

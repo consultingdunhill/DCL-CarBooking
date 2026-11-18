@@ -10,10 +10,17 @@
  *  - the linked WhatsApp device, when WHATSAPP_PROVIDER=baileys
  *  - the CRM's portfolio, then its signed deals (as closures), nightly, when CRM_API_URL is set
  *  - viewings (stops booked for CRM leads) pushed back to the CRM as they change
+ *  - the read-only copy in ERPNext (cars, bookings, trips, fuel, costs), when ERP_SYNC_ENABLED
  */
 import { prisma } from '@carbooking/db';
 import {
   crmEnabled,
+  env,
+  ErpClient,
+  ErpError,
+  runErpSync,
+  saveErpHealth,
+  summary,
   dispatchNotifications,
   getBoss,
   pushCrmViewings,
@@ -50,6 +57,28 @@ const periodic = (name: string, fn: (now: Date) => Promise<unknown>) => async ()
 };
 
 // Cron runs at most once a minute; every minute is right for a 5-minute heartbeat.
+/** One ERPNext client for the worker's life, so a password sign-in happens once, not every run. */
+let erp: ErpClient | null = null;
+/** An ERPNext pass; whatever stops it is saved for Fleet's admin banner (erpSyncWarning). */
+const erpPass = (full: boolean) => async () => {
+  const name = `erp.${full ? 'reconcile' : 'sync'}`;
+  try {
+    erp ??= ErpClient.fromEnv();
+  } catch (err) {
+    if (!(err instanceof ErpError)) throw err;
+    await saveErpHealth({ error: err.message }); // e.g. no ERP_URL: nothing could run
+    console.warn(`[${name}] can't start: ${err.message}`);
+    return;
+  }
+  try {
+    const r = await runErpSync(erp, { full });
+    if (full || r.created || r.updated || r.deleted || r.failed) console.log(`[${name}] ${summary(r)}`);
+  } catch (err) {
+    if (!(err instanceof ErpError)) throw err;
+    console.warn(`[${name}] failed: ${err.message}`); // runErpSync saved it for the banner
+  }
+};
+
 const schedules: [string, string, (now: Date) => Promise<unknown>][] = [
   [QUEUES.trackingMonitor, '* * * * *', runTrackingMonitor],
   [QUEUES.trackerSync, '* * * * *', runTrackerSync],
@@ -71,6 +100,13 @@ const schedules: [string, string, (now: Date) => Promise<unknown>][] = [
     const r = await pushCrmViewings(now);
     if (r.pushed || r.failed.length) console.log('[crm.push-viewings]', r);
   }],
+  // Every two minutes, and a nightly repair at 02:15 in Nairobi (23:15 UTC).
+  ...(env.ERP_SYNC_ENABLED
+    ? ([
+        [QUEUES.erpSync, '*/2 * * * *', erpPass(false)],
+        [QUEUES.erpReconcile, '15 23 * * *', erpPass(true)],
+      ] as [string, string, (now: Date) => Promise<unknown>][])
+    : []),
 ];
 
 for (const [queue, cron, fn] of schedules) {

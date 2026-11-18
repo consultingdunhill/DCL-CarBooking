@@ -86,6 +86,19 @@ const EnvSchema = z.object({
   CRM_API_URL: z.preprocess(blankToUndefined, z.url().optional()),
   /** The CRM's FLEET_INTEGRATION_TOKEN. */
   CRM_API_TOKEN: z.preprocess(blankToUndefined, z.string().min(32, 'CRM_API_TOKEN must be at least 32 characters').optional()),
+
+  /**
+   * ERPNext, the company ERP: a read-only copy of cars, bookings, trips, fuel and costs
+   * (packages/server/src/erp). Off by default, so deploying it changes nothing until set.
+   */
+  ERP_SYNC_ENABLED: z.preprocess((v) => v === 'true' || v === '1', z.boolean()).default(false),
+  ERP_URL: z.preprocess(blankToUndefined, z.url().optional()),
+  /** The ERP sync user's API key (role "Dunhill Integration" only)... */
+  ERP_API_KEY: opt,
+  ERP_API_SECRET: opt,
+  /** ...or its password, while the ERP can't take an API key. */
+  ERP_USER: opt,
+  ERP_PASSWORD: opt,
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -102,6 +115,9 @@ function parseEnv(): Env {
   }
   if (env.AUTH_MODE === 'entra' && (!env.ENTRA_TENANT_ID || !env.ENTRA_API_AUDIENCE)) {
     throw new Error('AUTH_MODE=entra needs ENTRA_TENANT_ID and ENTRA_API_AUDIENCE');
+  }
+  if (env.ERP_SYNC_ENABLED && (!env.ERP_URL || !((env.ERP_API_KEY && env.ERP_API_SECRET) || (env.ERP_USER && env.ERP_PASSWORD)))) {
+    throw new Error('ERP_SYNC_ENABLED needs ERP_URL and either ERP_API_KEY + ERP_API_SECRET or ERP_USER + ERP_PASSWORD');
   }
   if (env.TRACKER_PROVIDER === 'oversee' && (!env.OVERSEE_USERNAME || !env.OVERSEE_PASSWORD)) {
     throw new Error('TRACKER_PROVIDER=oversee needs OVERSEE_USERNAME and OVERSEE_PASSWORD');
