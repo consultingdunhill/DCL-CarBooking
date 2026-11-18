@@ -1,4 +1,4 @@
-import { carMonthlyStats, computeTripCost, costPerKmLookup, STOPS_THAT_HAPPENED, type FuelEntryLite, type HourlyRateLite, type KmRecord, type TripCost } from './costs';
+import { carMonthlyStats, computeTripCost, costPerKmLookup, STOPS_THAT_HAPPENED, type FuelEntryLite, type CarMonthStats, type HourlyRateLite, type KmRecord, type TripCost } from './costs';
 import { DEPARTMENT_LABELS, type BookingStatus, type DealType, type Department, type PropertyService, type PropertyStatus, type StopStatus, type TrackingEventType } from './enums';
 import type { Settings } from './settings';
 import { addMonths, DAY, HOUR, monthKey, monthRange, workingMinutesBetween } from './time';
@@ -218,6 +218,8 @@ interface Context {
   drivers: Map<string, RDDriver>;
   costed: CostedTrip[];
   months: string[];
+  /** Every car's figures per month, from two months before the period (rolling windows). */
+  stats: CarMonthStats[];
 }
 
 function buildContext(ds: ReportDataset, f: ReportFilters): Context {
@@ -275,7 +277,21 @@ function buildContext(ds: ReportDataset, f: ReportFilters): Context {
       })),
     });
   }
-  return { ds, f, users, reasons, properties, clients, cars, drivers, costed, months };
+  return { ds, f, users, reasons, properties, clients, cars, drivers, costed, months, stats };
+}
+
+/**
+ * Every completed trip in the period, costed exactly as the reports cost it, and each car's
+ * figures for each month of the period. Feeds the read-only copy in ERPNext
+ * (packages/server/src/erp), so the ERP shows the same numbers as Fleet's own reports.
+ */
+export function costedTripsAndCarMonths(
+  ds: ReportDataset,
+  period: { from: Date; to: Date },
+): { trips: CostedTrip[]; carMonths: CarMonthStats[] } {
+  const ctx = buildContext(ds, { from: period.from, to: period.to });
+  const inPeriod = new Set(ctx.months);
+  return { trips: ctx.costed, carMonths: ctx.stats.filter((m) => inPeriod.has(m.month)) };
 }
 
 function kmRecords(bookings: RDBooking[]): KmRecord[] {

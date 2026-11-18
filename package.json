@@ -17,7 +17,9 @@
     "db:migrate": "pnpm --filter @carbooking/db migrate:deploy",
     "db:migrate:dev": "pnpm --filter @carbooking/db migrate:dev",
     "db:seed": "pnpm --filter @carbooking/db seed",
-    "db:reset": "pnpm --filter @carbooking/db reset"
+    "db:reset": "pnpm --filter @carbooking/db reset",
+    "erp:schema": "pnpm --filter @carbooking/worker exec tsx src/erp-cli.ts schema",
+    "erp:sync": "pnpm --filter @carbooking/worker exec tsx src/erp-cli.ts sync"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

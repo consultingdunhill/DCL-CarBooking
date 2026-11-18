@@ -3,8 +3,11 @@
 import { build } from 'esbuild';
 
 // `node ../api/build.mjs --worker` from apps/worker builds the worker the same way.
+import { existsSync } from 'node:fs';
+
 await build({
-  entryPoints: ['src/index.ts'],
+  // The worker also ships its ERPNext command line (src/erp-cli.ts).
+  entryPoints: ['src/index.ts', ...(existsSync('src/erp-cli.ts') ? ['src/erp-cli.ts'] : [])],
   outdir: 'dist',
   bundle: true,
   platform: 'node',

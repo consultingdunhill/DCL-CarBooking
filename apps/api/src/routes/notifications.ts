@@ -1,6 +1,6 @@
 import { DomainError, PushSubscriptionSchema } from '@carbooking/core';
 import { prisma } from '@carbooking/db';
-import { env, notify, pushConfigured, readWhatsappStatus } from '@carbooking/server';
+import { env, erpSyncWarning, notify, pushConfigured, readWhatsappStatus } from '@carbooking/server';
 import type { FastifyInstance } from 'fastify';
 import { me } from '../lib/auth';
 import { parse } from '../lib/http';
@@ -32,6 +32,9 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   /** Linked-device WhatsApp: status and QR code (saved by the worker, which holds the session). */
   app.get('/admin/whatsapp', { config: { auth: 'admin' } }, async () => readWhatsappStatus());
+
+  /** Whether ERPNext's copy of Fleet is keeping up (the worker records each run); null when it is. */
+  app.get('/admin/erp-sync', { config: { auth: 'admin' } }, async () => ({ warning: await erpSyncWarning() }));
 
   /** Send the signed-in admin a WhatsApp test message (delivered by the worker). */
   app.post('/admin/whatsapp/test', { config: { auth: 'admin' } }, async (req) => {
