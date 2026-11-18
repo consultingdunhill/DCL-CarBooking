@@ -227,7 +227,8 @@ export function bookingDoctype(): DocTypeDef {
       f('notes', 'Small Text', 'Notes'),
       f('stops_tab', 'Tab Break', 'Stops'),
       f('stops', 'Table', 'Stops', { options: STOP }),
-      f('trip_tab', 'Tab Break', 'Trip'),
+      // ERPNext stores an empty number as 0, so trip and cost show only once there is a trip.
+      f('trip_tab', 'Tab Break', 'Trip', { depends_on: 'eval:doc.trip_started_at' }),
       f('trip_started_at', 'Datetime', 'Started'),
       f('trip_ended_at', 'Datetime', 'Ended'),
       select('end_method', 'How it ended', TRIP_END_METHODS),
@@ -238,7 +239,7 @@ export function bookingDoctype(): DocTypeDef {
       f('trip_km', 'Float', 'Km (odometer)', { precision: '1' }),
       f('unlogged_km', 'Int', 'Km driven between trips', { depends_on: 'eval:doc.unlogged_km' }),
       f('gps_km', 'Float', 'Km (GPS)', { depends_on: 'eval:doc.gps_km', precision: '1' }),
-      section('cost_section', 'Cost'),
+      section('cost_section', 'Cost', { depends_on: 'eval:doc.trip_ended_at' }),
       cost('fuel_cost', 'Fuel'),
       cost('time_cost', "People's time"),
       cost('total_cost', 'Total', { bold: 1 }),
